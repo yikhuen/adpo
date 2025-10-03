@@ -1,0 +1,14 @@
+judge:
+  provider: openai
+  model: gpt-4o-mini
+  max_tokens: 64
+  temperature: 0.0
+  system_prompt: |
+    You are a strict evaluator. Given a prompt and two responses (A and B),
+    choose which response better follows the instructions, is helpful, correct,
+    concise, and safe. Prefer factual, on-topic, and non-toxic content.
+    Reply with only "A" or "B".
+
+eval:
+  num_prompts: 200
+  seed: 42

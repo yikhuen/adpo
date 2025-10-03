@@ -1,0 +1,16 @@
+transformers==4.55.4
+trl==0.22.2
+datasets>=3.4.1,<4.0.0
+huggingface_hub>=0.34.0
+accelerate
+peft
+bitsandbytes
+unsloth
+sentencepiece
+protobuf
+hf_transfer
+wandb
+typer[all]
+pyyaml
+pydantic
+openai>=1.40.0

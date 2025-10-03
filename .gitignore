@@ -1,0 +1,35 @@
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+.venv/
+.env
+.env.*
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Logs
+logs/
+*.log
+wandb/
+
+# Data / cache / outputs
+cache/
+.data/
+data/
+outputs/
+checkpoints/
+*.pt
+*.bin
+
+# OS / editors
+.DS_Store
+Thumbs.db
+.vscode/
+.history/
+
+# Hugging Face caches (if checked into repo paths)
+**/.cache/
+**/.huggingface/
