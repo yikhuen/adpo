@@ -1,4 +1,4 @@
-# Adaptive DPO (Minimal Demo)
+# Adaptive DPO
 
 Quick demo to train DPO with an adaptive beta controller (target-KL, EMA, clipping) on `Qwen/Qwen2.5-7B-Instruct` using Unsloth + TRL, and evaluate with an LLM-as-judge (`gpt-4o-mini`).
 
