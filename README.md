@@ -87,7 +87,7 @@ Speed tips:
 tar -czf results.tgz outputs outputs_fixed
 # from your PC
 scp -P <PORT> -i ~/.ssh/id_rsa root@<PUBLIC_IP>:~/adpo/results.tgz \
-  "/c/Users/chaiy/Downloads/"
+  "/c/Users/<username>/Downloads/"
 ```
 
 ## Notes
