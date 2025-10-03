@@ -2,9 +2,9 @@
 
 Quick demo to train DPO with an adaptive beta controller (target-KL, EMA, clipping) on `Qwen/Qwen2.5-7B-Instruct` using Unsloth + TRL, and evaluate with an LLM-as-judge (`gpt-4o-mini`).
 
-## 0) Deploy a GPU on Runpod (A40 recommended)
+## 0) Deploy a GPU (A40 recommended)
 - GPU: A40 48GB (great value) or L4 24GB. GPU count: 1
-- Template: Runpod PyTorch 2.8 (Ubuntu 24.04 + CUDA 12.8.x) – PyTorch is preinstalled
+- Template: PyTorch 2.8 (Ubuntu 24.04 + CUDA 12.8.x) – PyTorch is preinstalled
 - Storage: 80–100 GB ephemeral. Do NOT attach a persistent volume unless you want to pay for storage after shutdown
 - Check “SSH Terminal Access”. Jupyter optional
 
@@ -89,10 +89,6 @@ tar -czf results.tgz outputs outputs_fixed
 scp -P <PORT> -i ~/.ssh/id_rsa root@<PUBLIC_IP>:~/adpo/results.tgz \
   "/c/Users/chaiy/Downloads/"
 ```
-
-## 9) Stop billing
-- Delete the pod in the Runpod console (this kills tmux and frees ephemeral storage)
-- If you created a persistent volume, delete it separately to stop storage charges
 
 ## Notes
 - Training uses Unsloth QLoRA (LoRA adapters on a 4-bit base). Not full fine-tuning
