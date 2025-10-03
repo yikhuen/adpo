@@ -5,6 +5,7 @@ _SRC_PATH = os.path.join(_REPO_ROOT, "src")
 if _SRC_PATH not in sys.path:
     sys.path.insert(0, _SRC_PATH)
 
+import unsloth
 import json
 import time
 import yaml
@@ -53,13 +54,19 @@ def load_lora_model(ckpt_dir: str):
     return base_model, tok
 
 
-def generate(model, tokenizer, prompt: str, max_new_tokens: int = 512) -> str:
+def generate_batch(model, tokenizer, prompts: List[str], max_new_tokens: int = 512) -> List[str]:
     model.eval()
-    inputs = tokenizer([prompt], return_tensors="pt", padding=True, truncation=True).to(model.device)
+    inputs = tokenizer(prompts, return_tensors="pt", padding=True, truncation=True).to(model.device)
     with torch.no_grad():
-        outputs = model.generate(**inputs, do_sample=False, temperature=0.0, top_p=1.0, max_new_tokens=max_new_tokens)
-    text = tokenizer.decode(outputs[0], skip_special_tokens=True)
-    return text
+        outputs = model.generate(
+            **inputs,
+            do_sample=False,
+            temperature=0.0,
+            top_p=1.0,
+            max_new_tokens=max_new_tokens,
+        )
+    texts = tokenizer.batch_decode(outputs, skip_special_tokens=True)
+    return texts
 
 
 def judge_choice(client, model: str, system_prompt: str, prompt: str, a: str, b: str) -> str:
@@ -76,7 +83,14 @@ def judge_choice(client, model: str, system_prompt: str, prompt: str, a: str, b:
 
 
 @app.command()
-def main(config: str = typer.Option(...), ckpt_adaptive: str = typer.Option("outputs"), ckpt_fixed: str = typer.Option("outputs_fixed"), dev: str = typer.Option(...)):
+def main(
+    config: str = typer.Option(...),
+    ckpt_adaptive: str = typer.Option("outputs"),
+    ckpt_fixed: str = typer.Option("outputs_fixed"),
+    dev: str = typer.Option(...),
+    batch_size: int = typer.Option(8, help="Batch size for generation per model"),
+    max_new_tokens: int = typer.Option(256, help="Max new tokens during generation"),
+):
     with open(config, "r", encoding="utf-8") as f:
         cfg = yaml.safe_load(f)
 
@@ -98,17 +112,15 @@ def main(config: str = typer.Option(...), ckpt_adaptive: str = typer.Option("out
 
     def eval_pair(model_a, tok_a, model_b, tok_b, title: str):
         total_n = len(prompts)
-        # Generation stage
         print(f"\n=== {title}: Generating responses for {total_n} prompts ===")
         gen_a, gen_b = [], []
-        for i, p in enumerate(prompts):
-            a = generate(model_a, tok_a, p)
-            b = generate(model_b, tok_b, p)
-            gen_a.append(a)
-            gen_b.append(b)
-            if (i + 1) % 10 == 0 or i == 0:
-                print(f"[gen {title}] {i+1}/{total_n}")
-        # Judging stage
+        for i in range(0, total_n, batch_size):
+            chunk = prompts[i : i + batch_size]
+            gen_a.extend(generate_batch(model_a, tok_a, chunk, max_new_tokens=max_new_tokens))
+            gen_b.extend(generate_batch(model_b, tok_b, chunk, max_new_tokens=max_new_tokens))
+            done = min(i + batch_size, total_n)
+            if done % 10 == 0 or i == 0:
+                print(f"[gen {title}] {done}/{total_n}")
         print(f"=== {title}: Judging pairs with {cfg['judge'].get('model','gpt-4o-mini')} ===")
         wins = 0
         for i, (p, a, b) in enumerate(zip(prompts, gen_a, gen_b)):
