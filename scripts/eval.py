@@ -1,4 +1,10 @@
 import os
+import sys
+_REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+_SRC_PATH = os.path.join(_REPO_ROOT, "src")
+if _SRC_PATH not in sys.path:
+    sys.path.insert(0, _SRC_PATH)
+
 import json
 import time
 import yaml
@@ -9,6 +15,8 @@ from typing import List, Dict, Tuple
 import torch
 import openai
 from unsloth import FastLanguageModel
+
+from adaptive_dpo.modeling import load_qwen25_7b_base
 
 app = typer.Typer()
 
@@ -32,16 +40,15 @@ def wilson_ci(wins: int, total: int, z: float = 1.96) -> Tuple[float, float]:
 
 
 def load_base_model():
-    model, tok = FastLanguageModel.from_pretrained("Qwen/Qwen2.5-7B-Instruct", max_seq_length=4096, load_in_4bit=True)
+    model, tok = load_qwen25_7b_base(max_seq_length=4096, load_in_4bit=True)
     return model, tok
 
 
 def load_lora_model(ckpt_dir: str):
-    base_model, tok = FastLanguageModel.from_pretrained("Qwen/Qwen2.5-7B-Instruct", max_seq_length=4096, load_in_4bit=True)
+    base_model, tok = load_qwen25_7b_base(max_seq_length=4096, load_in_4bit=True)
     try:
         base_model.load_adapter(ckpt_dir)
     except Exception:
-        # Fallback: PEFT merges are saved under same dir; if not present, rely on base
         pass
     return base_model, tok
 

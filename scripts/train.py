@@ -1,4 +1,11 @@
 import os
+import sys
+# Ensure local src/ is importable when running as a script
+_REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+_SRC_PATH = os.path.join(_REPO_ROOT, "src")
+if _SRC_PATH not in sys.path:
+    sys.path.insert(0, _SRC_PATH)
+
 import json
 import yaml
 import typer
