@@ -97,11 +97,21 @@ def main(config: str = typer.Option(...), ckpt_adaptive: str = typer.Option("out
             prompts.append(json.loads(line)["prompt"])
 
     def eval_pair(model_a, tok_a, model_b, tok_b, title: str):
-        wins = 0
-        total = 0
-        for p in prompts:
+        total_n = len(prompts)
+        # Generation stage
+        print(f"\n=== {title}: Generating responses for {total_n} prompts ===")
+        gen_a, gen_b = [], []
+        for i, p in enumerate(prompts):
             a = generate(model_a, tok_a, p)
             b = generate(model_b, tok_b, p)
+            gen_a.append(a)
+            gen_b.append(b)
+            if (i + 1) % 10 == 0 or i == 0:
+                print(f"[gen {title}] {i+1}/{total_n}")
+        # Judging stage
+        print(f"=== {title}: Judging pairs with {cfg['judge'].get('model','gpt-4o-mini')} ===")
+        wins = 0
+        for i, (p, a, b) in enumerate(zip(prompts, gen_a, gen_b)):
             choice = judge_choice(
                 client,
                 model=cfg["judge"].get("model", "gpt-4o-mini"),
@@ -111,10 +121,11 @@ def main(config: str = typer.Option(...), ckpt_adaptive: str = typer.Option("out
                 b=b,
             )
             wins += 1 if choice == "A" else 0
-            total += 1
-        wr = wins / max(1, total)
-        lo, hi = wilson_ci(wins, total)
-        print(json.dumps({"pair": title, "wins": wins, "total": total, "win_rate": wr, "ci95": [lo, hi]}, indent=2))
+            if (i + 1) % 10 == 0 or i == 0:
+                print(f"[judge {title}] {i+1}/{total_n}")
+        wr = wins / max(1, total_n)
+        lo, hi = wilson_ci(wins, total_n)
+        print(json.dumps({"pair": title, "wins": wins, "total": total_n, "win_rate": wr, "ci95": [lo, hi]}, indent=2))
 
     eval_pair(ada_model, ada_tok, base_model, base_tok, "adaptive_vs_base")
     eval_pair(ada_model, ada_tok, fix_model, fix_tok, "adaptive_vs_fixed")
