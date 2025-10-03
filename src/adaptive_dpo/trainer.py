@@ -30,13 +30,13 @@ class AdaptiveDPOTrainer(DPOTrainer):
         diff = (pol_tok - ref_tok)
         return diff.mean().clamp_min(0.0).item()
 
-    def compute_loss(self, model, inputs, return_outputs=False):
+    def compute_loss(self, model, inputs, return_outputs=False, **kwargs):
         # Update beta from KL estimate
         kl_batch = self._kl_per_token_on_prompt(inputs)
         beta = self.beta_controller.update(kl_batch)
         old_beta = getattr(self, "beta", None)
         self.beta = beta
-        loss = super().compute_loss(model, inputs, return_outputs)
+        loss = super().compute_loss(model, inputs, return_outputs=return_outputs, **kwargs)
         self.beta = old_beta
         # Log controller state if available
         if self.accelerator.is_main_process:
