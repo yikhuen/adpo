@@ -11,12 +11,29 @@ class AdaptiveDPOTrainer(DPOTrainer):
         super().__init__(*args, **kwargs)
         self.beta_controller = beta_controller
 
+    def _pick_ids_and_mask(self, batch):
+        # Try common TRL keys in order of preference
+        # 1) Prompt-only tensors (if provided)
+        if "prompt" in batch and isinstance(batch["prompt"], dict) and "input_ids" in batch["prompt"]:
+            input_ids = batch["prompt"]["input_ids"]
+            attention_mask = batch["prompt"].get("attention_mask")
+            return input_ids, attention_mask
+        # 2) Chosen sequence tensors (includes prompt+response)
+        if "chosen_input_ids" in batch:
+            input_ids = batch["chosen_input_ids"]
+            attention_mask = batch.get("chosen_attention_mask")
+            return input_ids, attention_mask
+        # 3) Generic input ids
+        if "input_ids" in batch:
+            return batch["input_ids"], batch.get("attention_mask")
+        return None, None
+
     @torch.no_grad()
     def _kl_per_token_on_prompt(self, batch) -> float:
-        # Expect batch["prompt"] already tokenized by TRL collator
-        input_ids = batch["prompt"]["input_ids"] if isinstance(batch["prompt"], dict) else batch["prompt"]
-        attention_mask = batch["prompt"].get("attention_mask") if isinstance(batch["prompt"], dict) else None
-        # Policy and ref forward on prompt tokens
+        input_ids, attention_mask = self._pick_ids_and_mask(batch)
+        if input_ids is None:
+            return 0.0
+        # Policy and ref forward on selected tokens
         pol = self.model(input_ids=input_ids, attention_mask=attention_mask)
         if self.ref_model is None:
             return 0.0
