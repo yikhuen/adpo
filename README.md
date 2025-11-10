@@ -46,43 +46,73 @@ EOF
 set -a && source .env && set +a
 ```
 
-## 5) Prepare a small held-out dev set
+## 5) Inspect and prepare datasets
+- Preview a few formatted examples (ensures system/user prompts look right):
+```bash
+python scripts/inspect_dataset.py --alias ultrafeedback --split train --samples 3
+python scripts/inspect_dataset.py --alias anthropic_hh --config configs/train/qwen25_7b_adaptive_beta.yaml --split train --samples 3
+```
+- Export a held-out prompt set for evaluation (reuses chat template formatting):
 ```bash
 python scripts/prepare_dev_set.py \
-  --dataset HuggingFaceH4/ultrafeedback_binarized \
+  --dataset ultrafeedback \
   --size 200 \
+  --split test \
   --out data/dev.jsonl
 ```
 
-## 6) Train
-- Adaptive-β DPO
+## 6) Train models
+- Adaptive per-token KL controller:
 ```bash
 python scripts/train.py --config configs/train/qwen25_7b_adaptive_beta.yaml
 ```
-- Fixed-β DPO baseline
+- Fixed-β baseline (set `fixed_beta` in config or override the file):
 ```bash
 python scripts/train.py --config configs/train/qwen25_7b_fixed_beta.yaml
 ```
-Outputs are saved to `outputs/` (adaptive) and `outputs_fixed/` (baseline) with LoRA adapters + tokenizer.
+- Annealed-β schedule baseline:
+```bash
+python scripts/train.py --config configs/train/qwen25_7b_annealed_beta.yaml
+```
 
-## 7) Evaluate (pairwise judge with gpt-4o-mini)
+Outputs are saved under `outputs/...` (per seed) with LoRA adapters, tokenizer, and `train_stats.json`.
+
+## 7) Evaluate with LLM judges
+Run multi-model comparisons with cached generations, metric exports, and judge agreement:
 ```bash
 python scripts/eval.py \
   --config configs/eval/judge_gpt4o_mini.yaml \
-  --ckpt-adaptive outputs \
-  --ckpt-fixed outputs_fixed \
-  --dev data/dev.jsonl
+  --force-judge    # optional; rerun judges even if cached decisions exist
 ```
-What you’ll see:
-- Stage headers: generation and judging per pair, e.g., `=== adaptive_vs_base: Generating ... ===`
-- Progress every 10 prompts: `[gen ...] 10/200`, `[judge ...] 10/200`
-- Final JSON with win rate and 95% CI for each pair
+Artifacts land in `research/results/eval/`:
+- `responses/*.jsonl` – per-model generations stripped of prompts
+- `decisions/*.jsonl` – per-judge pairwise choices
+- `metrics/summary.json` & `summary.csv` – win rates + 95% CIs
+- `metrics/judge_agreement.json` – agreement %, Cohen’s κ (when ≥2 judges)
 
 Speed tips:
-- Reduce dev set: `--size 50`
-- In `scripts/eval.py`, lower `max_new_tokens` (default 512)
+- Smaller dev set: `python scripts/prepare_dev_set.py --size 50 ...`
+- Fast dry-run: `python scripts/eval.py --config ... --limit 50`
+- Reduce decoding length via `generation.max_new_tokens` in the eval config.
 
-## 8) Save and copy results off the pod
+## 8) Orchestrate complete phases (optional)
+Automate the multi-run experiments described in `research/poster_plan.md`:
+```bash
+# Phase 1: fixed-β brittleness grid (β = 0.05, 0.10, 0.20)
+python scripts/orchestrate.py phase1
+
+# Phase 2: adaptive vs oracle vs annealed + evaluation
+python scripts/orchestrate.py phase2
+
+# Phase 3: ablation stress test (toggle EMA/deadband/clipping)
+python scripts/orchestrate.py phase3
+
+# Phase 4: generalization evaluation (create a matching eval config first)
+python scripts/orchestrate.py phase4 --eval-config configs/eval/generalization.yaml
+```
+Results for each phase (training stats, evaluation metrics) are stored in `research/results/<phase>/`.
+
+## 9) Save and copy results off the pod
 ```bash
 tar -czf results.tgz outputs outputs_fixed
 # from your PC
@@ -92,5 +122,6 @@ scp -P <PORT> -i ~/.ssh/id_rsa root@<PUBLIC_IP>:~/adpo/results.tgz \
 
 ## Notes
 - Training uses Unsloth QLoRA (LoRA adapters on a 4-bit base). Not full fine-tuning
-- We log β, KL EMA, and related stats to Weights & Biases (`WANDB_*` envs required)
+- We log β, KL EMA, runtime stats, and throughput to Weights & Biases (`WANDB_*` envs required)
 - If you see import issues, export once: `export PYTHONPATH=$PWD/src:$PYTHONPATH`
+- For a detailed experiment playbook (phase breakdown, compute budget, risks) see `research/runbook.md`

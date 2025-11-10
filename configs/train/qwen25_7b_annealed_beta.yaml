@@ -1,4 +1,4 @@
-# Training config for Qwen2.5-7B-Instruct with Adaptive Beta (per-token KL)
+# Training config for Qwen2.5-7B-Instruct with cosine-annealed beta schedule
 project: adaptive-dpo
 seed: 42
 seeds: [42]
@@ -16,17 +16,12 @@ dataset:
     eval: test_prefs
   sample_frac: 0.005
 
-beta_controller:
-  kl_target: 0.03           # nats/token
-  eta: 0.02
-  ema_alpha: 0.10
-  beta_init: 0.10
-  beta_min: 0.02
-  beta_max: 3.0
-  deadband_ratio: 0.20      # ±20%
-  use_ema: true
-  use_deadband: true
-  use_clipping: true
+fixed_beta: 0.20  # starting beta for schedule
+
+beta_schedule:
+  beta_start: 0.20
+  beta_end: 0.05
+  schedule: cosine
 
 trainer:
   per_device_train_batch_size: 1
@@ -38,8 +33,9 @@ trainer:
   optim: adamw_8bit
   weight_decay: 0.0
   lr_scheduler_type: linear
-  output_dir: outputs/adaptive_beta
+  output_dir: outputs/annealed_beta
   report_to: wandb
   max_length: 1024
   max_prompt_length: 512
   train_split: train
+

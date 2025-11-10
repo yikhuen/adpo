@@ -33,3 +33,7 @@ Thumbs.db
 # Hugging Face caches (if checked into repo paths)
 **/.cache/
 **/.huggingface/
+
+# Research materials
+research/
+authorkitAAAI/

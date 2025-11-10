@@ -1,12 +1,20 @@
 # Training config for Qwen2.5-7B-Instruct with Fixed Beta DPO
-seed: 42
 project: adaptive-dpo
+seed: 42
+seeds: [42]
 
 model:
   name: Qwen/Qwen2.5-7B-Instruct
   max_seq_length: 4096
   load_in_4bit: true
   dtype: null
+
+dataset:
+  alias: ultrafeedback
+  splits:
+    train: train_prefs
+    eval: test_prefs
+  sample_frac: 0.005
 
 fixed_beta: 0.10
 
@@ -20,14 +28,8 @@ trainer:
   optim: adamw_8bit
   weight_decay: 0.0
   lr_scheduler_type: linear
-  output_dir: outputs_fixed
+  output_dir: outputs/fixed_beta
   report_to: wandb
   max_length: 1024
   max_prompt_length: 512
-
-dataset:
-  name: HuggingFaceH4/ultrafeedback_binarized
-  sample_frac: 0.005
-  splits:
-    - train_prefs
-    - test_prefs
+  train_split: train
