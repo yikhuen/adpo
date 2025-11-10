@@ -96,7 +96,7 @@ Speed tips:
 - Reduce decoding length via `generation.max_new_tokens` in the eval config.
 
 ## 8) Orchestrate complete phases (optional)
-Automate the multi-run experiments described in `research/poster_plan.md`:
+ Automate the multi-run experiments for the four study phases ([Phase 1](#phase-1), [Phase 2](#phase-2), [Phase 3](#phase-3), [Phase 4](#phase-4)):
 ```bash
 # Phase 1: fixed-β brittleness grid (β = 0.05, 0.10, 0.20)
 python scripts/orchestrate.py phase1
@@ -125,3 +125,64 @@ scp -P <PORT> -i ~/.ssh/id_rsa root@<PUBLIC_IP>:~/adpo/results.tgz \
 - We log β, KL EMA, runtime stats, and throughput to Weights & Biases (`WANDB_*` envs required)
 - If you see import issues, export once: `export PYTHONPATH=$PWD/src:$PYTHONPATH`
 - For a detailed experiment playbook (phase breakdown, compute budget, risks) see `research/runbook.md`
+
+ **Phase Plan**
+
+ <a id="phase-1"></a>
+
+ ## Phase 1 – Fixed-β Brittleness Study
+- **Objective:** Demonstrate how static β choices create a brittle trade-off between policy drift and underfitting on UltraFeedback.
+- **Configuration:** Qwen2.5-7B-Instruct, Unsloth QLoRA (4-bit), batch 2×4 tokens with gradient accumulation 8, learning rate 1e-5, one epoch.
+- **Experiments:** Train SFT baseline; DPO with β ∈ {0.05, 0.10, 0.20}. Log per-step KLtoken, β (static), judge win rates (vs. SFT), response length, refusal rate, safety flags.
+- **Analytics:** Wilson 95% CIs over 200-prompt evaluation set, GPT-4o-mini judge with deterministic decoding (T=0), secondary check using open-source judge (e.g., Llama Guard).
+- **Deliverables:** Oracle bar chart (win rate vs. SFT), KL trajectory plot highlighting drift (low β) vs. underfitting (high β), failure-mode table (length, refusals, safety).
+
+ <a id="phase-2"></a>
+
+ ## Phase 2 – Adaptive Controller vs. Baselines
+- **Objective:** Show the proposed controller matches/exceeds oracle performance in one run while retaining stability.
+- **Baselines:** Oracle fixed β (best from Phase 1); annealed β schedule (e.g., β0=0.20 decaying to 0.05 with cosine anneal).
+- **Controller Setup:** EMA α=0.10, deadband ±20% around KL* = 0.03 nats/token, η=0.02, βmin=0.02, βmax=3.0.
+- **Experiments:** Train each model with two random seeds; reuse Phase 1 logging; capture β trajectory for adaptive and annealed runs.
+- **Analytics:** Report mean ± 95% CI across seeds; run paired bootstrap on win rates (adaptive vs. oracle, adaptive vs. annealed). Include stability plot overlaying KLema vs. KL* and β trajectory.
+- **Deliverables:** “Money” bar chart with win rates and error bars; dual-axis stability plot; summary table for length/safety.
+
+ <a id="phase-3"></a>
+
+ ## Phase 3 – Controller Ablation Justification
+- **Objective:** Validate necessity of EMA, deadband, and clipping components.
+- **Setup:** Same training recipe, 25% stratified subset of UltraFeedback, single seed.
+- **Variants:** Full controller, No Deadband, No EMA, No Clipping.
+- **Analytics:** Plot β trajectory and KLema for each variant; compute win rate vs. SFT on 100-prompt eval (deterministic); note qualitative instability (oscillation, divergence).
+- **Theoretical Touch:** Add text panel outlining control-theory intuition (EMA for noise suppression, deadband to avoid chatter, clipping to bound gains).
+- **Deliverables:** Bar chart of win rates per ablation; 2×2 β trajectory grid; succinct theoretical summary box.
+
+ <a id="phase-4"></a>
+
+ ## Phase 4 – Generalization Stress Test
+- **Objective:** Prove the controller generalizes without retuning.
+- **Models:** Best adaptive model and oracle fixed-β from Phase 2.
+- **Datasets:** UltraFeedback (helpfulness), Anthropic HH-RLHF (harmlessness), standard sycophancy dataset (e.g., open-source SAA pairs). Convert to DPO pairs with consistent formatting.
+  - **Preprocessing:** For HH, use harmless/helpful preference pairs, filter by quality label, and format as (prompt, preferred, dispreferred) strings with consistent system prompts. For sycophancy, align question-answer pairs, mark anti-sycophancy responses as preferred, and ensure tokenization matches UltraFeedback pipeline.
+- **Protocol:** Evaluate zero-shot on new datasets using deterministic decoding; log win rate, refusal/safety metrics, and response length.
+- **Analytics:** 95% CIs via Wilson interval; mention absence of retraining; run single seed due to budget, document limitation.
+- **Deliverables:** Generalization matrix table covering all metrics; brief narrative of observed robustness vs. failure.
+
+## Phase 5 – Synthesis and Future Work
+- **Objective:** Craft the closing story that links brittleness discovery → adaptive solution → justified design → generalizable recipe.
+- **Outputs:** Poster conclusion panel, planned extension bullets (PID, multi-objective, ORPO/SimPO transfer), highlight compute savings from reduced sweeps.
+
+## Evaluation & Statistical Protocol
+- **Judges:** Primary GPT-4o-mini with rubric, secondary open-source model (e.g., Prometheus 2 or Arena hardwired reward) for robustness.
+- **Judge Consistency:** Compute agreement metrics (percentage agreement + Cohen’s κ) between judges on a 50-sample subset; manually inspect disagreements to adjust prompts or scoring rubrics if needed.
+- **Sample Sizes:** 200 prompts for headline phases 1–2, 100 for ablations, 200 combined for generalization (≈70 per dataset).
+- **Seeding:** Two seeds for SFT/oracle/adaptive/annealed; disclose when single-seed results are reported.
+- **Intervals & Tests:** Wilson 95% CI for binary win rates; paired bootstrap (1k samples) for adaptive vs. baselines; report p-values where meaningful.
+- **Logging:** Weights & Biases dashboards capturing KLtoken, KLema, β, loss, throughput; save checkpoints at mid-epoch and final.
+
+## Compute & Resource Feasibility
+- **Hardware Assumption:** Single 24–48 GB GPU (local 4090 or cloud L40S/A40). Per-run VRAM ≈20 GB with 4-bit QLoRA rank-32 adapters.
+- **Runtime Estimates:** Full UltraFeedback epoch ≈3–3.5 GPU-hours; Phase 1 grid (3 runs) ≈10 GPU-hours; Phase 2 (3 configs ×2 seeds) ≈18 GPU-hours; Phase 3 ablations 4 runs ×1.5 GPU-hours ≈6 GPU-hours; Phase 4 evaluations ≈4 GPU-hours. Total ≈38 GPU-hours with serialization.
+- **Cost Controls:** Use dataset subsets for ablations; cache LoRA adapters to resume; run generalization evaluations using existing checkpoints; schedule cloud bursts only for multi-seed phases.
+- **Fallbacks:** Drop to Qwen2.5-3B or 1.8B if hardware constrained; reduce Phase 2 seeds to one and note limitation; cut Phase 4 to one additional dataset if time-compressed.
+- **Risk Notes:** Monitor controller hyperparameters on small pilot before full runs; prepare emergency β clipping bounds; verify dataset preprocessing scripts for HH and sycophancy prior to large runs; pre-test judge prompts to ensure consistent scoring before committing to full evaluations.
