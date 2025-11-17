@@ -48,16 +48,17 @@ set -a && source .env && set +a
 
 ## 5) Inspect and prepare datasets
 - Preview a few formatted examples (ensures system/user prompts look right):
-```bash
-python scripts/inspect_dataset.py --alias ultrafeedback --split train --samples 3
+python scripts/inspect_dataset.py \
+  --config configs/train/qwen25_7b_adaptive_beta.yaml \
+  --split train \
+  --samples 3
 python scripts/inspect_dataset.py --alias anthropic_hh --config configs/train/qwen25_7b_adaptive_beta.yaml --split train --samples 3
 ```
 - Export a held-out prompt set for evaluation (reuses chat template formatting):
-```bash
 python scripts/prepare_dev_set.py \
-  --dataset ultrafeedback \
+  --config configs/train/qwen25_7b_adaptive_beta.yaml \
   --size 200 \
-  --split test \
+  --split eval \
   --out data/dev.jsonl
 ```
 
