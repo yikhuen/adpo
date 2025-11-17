@@ -168,7 +168,14 @@ class PairwiseJudge:
             api_key = cfg.get("api_key") or os.environ.get("OPENAI_API_KEY")
             if not api_key:
                 raise RuntimeError("OPENAI_API_KEY not set for OpenAI judge.")
-            self.client = openai.OpenAI(api_key=api_key)
+            # Add timeout and max_retries to handle connection issues
+            timeout = cfg.get("timeout", 60.0)
+            max_retries = cfg.get("max_retries", 3)
+            self.client = openai.OpenAI(
+                api_key=api_key,
+                timeout=timeout,
+                max_retries=max_retries,
+            )
             self.kwargs = cfg
         elif self.provider == "hf_causal":
             if not self.model_name:
@@ -206,14 +213,26 @@ class PairwiseJudge:
             else:
                 messages.append({"role": "system", "content": DEFAULT_PROMPT_TEMPLATE})
             messages.append({"role": "user", "content": formatted})
-            resp = self.client.chat.completions.create(
-                model=self.model_name or "gpt-4o-mini",
-                messages=messages,
-                temperature=self.temperature,
-                max_tokens=self.max_tokens,
-            )
-            text = resp.choices[0].message.content or ""
-            return self._parse_choice(text)
+            
+            # Retry logic for connection errors
+            max_attempts = 3
+            for attempt in range(max_attempts):
+                try:
+                    resp = self.client.chat.completions.create(
+                        model=self.model_name or "gpt-4o-mini",
+                        messages=messages,
+                        temperature=self.temperature,
+                        max_tokens=self.max_tokens,
+                    )
+                    text = resp.choices[0].message.content or ""
+                    return self._parse_choice(text)
+                except (openai.APIConnectionError, openai.APIError) as e:
+                    if attempt < max_attempts - 1:
+                        wait_time = 2 ** attempt  # Exponential backoff: 1s, 2s, 4s
+                        time.sleep(wait_time)
+                        continue
+                    else:
+                        raise
 
         # hf_causal
         input_text = formatted
