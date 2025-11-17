@@ -23,6 +23,11 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 from adaptive_dpo.modeling import load_qwen25_7b_base
 from adaptive_dpo.utils.generate import generate_batch
 
+try:
+    from plot_ablation_bar import build_ablation_bar_figure
+except ImportError:  # pragma: no cover - helper script may be unavailable in some contexts
+    build_ablation_bar_figure = None
+
 app = typer.Typer(help="Evaluate preference models with multiple judges and export metrics.")
 
 DEFAULT_PROMPT_TEMPLATE = (
@@ -373,6 +378,116 @@ def compute_cohen_kappa(a: List[str], b: List[str]) -> float:
     return (obs - expected) / denom
 
 
+def log_results_to_wandb(
+    cfg: Dict[str, Any],
+    metrics_summary: Dict[str, Dict[str, Any]],
+    summary_path: Path,
+    csv_path: Path,
+    prompt_count: int,
+    config_path: str,
+):
+    wandb_cfg = cfg.get("wandb", {})
+    if not wandb_cfg.get("enabled"):
+        return
+
+    try:
+        import wandb
+    except ImportError:
+        typer.echo("[eval] wandb is not installed; skipping wandb logging.")
+        return
+
+    init_kwargs: Dict[str, Any] = {}
+    for key in ("project", "entity", "group", "job_type", "name", "notes"):
+        value = wandb_cfg.get(key)
+        if value is not None:
+            init_kwargs[key] = value
+    if wandb_cfg.get("tags"):
+        init_kwargs["tags"] = wandb_cfg["tags"]
+    if wandb_cfg.get("settings"):
+        init_kwargs["settings"] = wandb_cfg["settings"]
+    if wandb_cfg.get("resume"):
+        init_kwargs["resume"] = wandb_cfg["resume"]
+
+    typer.echo("[eval] Initialising wandb run for evaluation logging.")
+    run = wandb.init(**init_kwargs)
+
+    extra_config = wandb_cfg.get("config")
+    if isinstance(extra_config, dict):
+        run.config.update(extra_config, allow_val_change=True)
+    run.config.update(
+        {
+            "eval_config_path": config_path,
+            "prompt_count": prompt_count,
+            "comparisons": list(metrics_summary.keys()),
+        },
+        allow_val_change=True,
+    )
+
+    if wandb_cfg.get("log_table", True):
+        table = wandb.Table(
+            columns=[
+                "comparison",
+                "judge",
+                "wins",
+                "total",
+                "win_rate",
+                "ci95_low",
+                "ci95_high",
+                "model_a",
+                "model_b",
+            ]
+        )
+        for comparison_name, judge_metrics in metrics_summary.items():
+            for judge_name, metric_entry in judge_metrics.items():
+                ci_low, ci_high = metric_entry["ci95"]
+                table.add_data(
+                    comparison_name,
+                    judge_name,
+                    metric_entry["wins"],
+                    metric_entry["total"],
+                    metric_entry["win_rate"],
+                    ci_low,
+                    ci_high,
+                    metric_entry["model_a"],
+                    metric_entry["model_b"],
+                )
+        run.log({"eval/summary_table": table}, commit=False)
+
+    bar_cfg = wandb_cfg.get("bar_chart", {})
+    if bar_cfg.get("enabled"):
+        if build_ablation_bar_figure is None:
+            typer.echo("[eval] plot_ablation_bar helper unavailable; skipping wandb bar chart logging.")
+        else:
+            comparisons = bar_cfg.get("comparisons") or list(metrics_summary.keys())
+            judge = bar_cfg.get("judge")
+            if not judge and metrics_summary:
+                first_metrics = next(iter(metrics_summary.values()))
+                judge = next(iter(first_metrics.keys()), None)
+            if not judge:
+                typer.echo("[eval] No judge specified for wandb bar chart; skipping.")
+            else:
+                try:
+                    fig = build_ablation_bar_figure(metrics_summary, comparisons, judge)
+                except (KeyError, ValueError) as exc:
+                    typer.echo(f"[eval] Failed to build bar chart for wandb: {exc}")
+                else:
+                    chart_name = bar_cfg.get("name", "eval/ablation_bar")
+                    import matplotlib.pyplot as plt
+
+                    run.log({chart_name: wandb.Image(fig)}, commit=False)
+                    plt.close(fig)
+
+    artifact_name = wandb_cfg.get("artifact_name", "eval-metrics")
+    artifact_type = wandb_cfg.get("artifact_type", "evaluation")
+    full_artifact_name = f"{artifact_name}-{run.id}"
+    artifact = wandb.Artifact(full_artifact_name, type=artifact_type)
+    artifact.add_file(str(summary_path), name="summary.json")
+    artifact.add_file(str(csv_path), name="summary.csv")
+    run.log_artifact(artifact)
+
+    run.finish()
+
+
 @app.command()
 def main(
     config: str = typer.Option(..., help="Path to evaluation YAML config."),
@@ -467,6 +582,15 @@ def main(
                     ]
                 )
     typer.echo(f"[eval] Wrote metrics CSV to {csv_path}")
+
+    log_results_to_wandb(
+        cfg,
+        metrics_summary,
+        summary_path,
+        csv_path,
+        prompt_count=len(prompts),
+        config_path=config,
+    )
 
     # Judge agreement
     agreement = compute_judge_agreement(per_judge_decisions)

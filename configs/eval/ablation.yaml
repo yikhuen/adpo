@@ -48,3 +48,23 @@ judges:
 output:
   dir: research/results/phase3_ablation
 
+wandb:
+  enabled: true
+  project: adaptive-dpo
+  run_name: phase3_ablation_eval
+  tags:
+    - eval
+    - phase3
+    - ablation
+  log_table: true
+  artifact_name: ablation-phase3-metrics
+  artifact_type: evaluation
+  bar_chart:
+    enabled: true
+    name: eval/ablation_bar
+    judge: primary
+    comparisons:
+      - ablation_full_vs_sft
+      - ablation_no_deadband_vs_sft
+      - ablation_no_ema_vs_sft
+      - ablation_no_clipping_vs_sft

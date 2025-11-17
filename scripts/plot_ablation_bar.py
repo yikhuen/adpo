@@ -13,7 +13,7 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
-from typing import Dict, List
+from typing import Any, Dict, List
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -50,11 +50,11 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def main():
-    args = parse_args()
-    metrics = load_metrics(Path(args.metrics))
-    keys: List[str] = [key.strip() for key in args.comparisons.split(",") if key.strip()]
-
+def build_ablation_bar_figure(
+    metrics: Dict[str, Dict[str, Dict[str, Any]]],
+    keys: List[str],
+    judge: str,
+) -> plt.Figure:
     labels: List[str] = []
     win_rates: List[float] = []
     error_bars: List[float] = []
@@ -62,31 +62,43 @@ def main():
     for key in keys:
         if key not in metrics:
             raise KeyError(f"Comparison '{key}' not found in metrics JSON.")
+        if judge not in metrics[key]:
+            raise KeyError(f"Judge '{judge}' not found for comparison '{key}'.")
 
-        section = metrics[key][args.judge]
+        section = metrics[key][judge]
         labels.append(
             key.replace("ablation_", "")
             .replace("_vs_sft", "")
             .replace("_", " ")
             .title()
         )
-        win_rates.append(section["win_rate"])
-        ci_low, ci_high = section["ci95"]
-        # Symmetric error bar: distance from mean to lower CI bound
-        error_bars.append(section["win_rate"] - ci_low)
+        win_rate = section["win_rate"]
+        ci_low, _ = section["ci95"]
+        win_rates.append(win_rate)
+        error_bars.append(win_rate - ci_low)
 
     ind = np.arange(len(labels))
-    plt.figure(figsize=(8, 4.5))
-    plt.bar(ind, win_rates, yerr=error_bars, capsize=6, color="#4C72B0")
-    plt.xticks(ind, labels, rotation=20)
-    plt.ylim(0.0, 1.0)
-    plt.ylabel("Win Rate vs. SFT")
-    plt.title(f"Ablation Impact on Win Rate ({args.judge.title()} Judge)")
-    plt.tight_layout()
+    fig, ax = plt.subplots(figsize=(8, 4.5))
+    ax.bar(ind, win_rates, yerr=error_bars, capsize=6, color="#4C72B0")
+    ax.set_xticks(ind)
+    ax.set_xticklabels(labels, rotation=20)
+    ax.set_ylim(0.0, 1.0)
+    ax.set_ylabel("Win Rate vs. SFT")
+    ax.set_title(f"Ablation Impact on Win Rate ({judge.title()} Judge)")
+    fig.tight_layout()
+    return fig
 
+
+def main():
+    args = parse_args()
+    metrics = load_metrics(Path(args.metrics))
+    keys: List[str] = [key.strip() for key in args.comparisons.split(",") if key.strip()]
+
+    fig = build_ablation_bar_figure(metrics, keys, args.judge)
     output_path = Path(args.output)
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    plt.savefig(output_path, dpi=200)
+    fig.savefig(output_path, dpi=200)
+    plt.close(fig)
     print(f"Saved bar chart to {output_path}")
 
 
