@@ -1,0 +1,50 @@
+prompts:
+  path: data/dev_ablation.jsonl
+  limit: 100
+  seed: 42
+
+generation:
+  batch_size: 8
+  max_new_tokens: 256
+  cache: true
+
+models:
+  sft:
+    kind: base
+  ablation_full:
+    kind: lora
+    checkpoint: outputs/adaptive_beta/ablation_full
+  ablation_no_deadband:
+    kind: lora
+    checkpoint: outputs/adaptive_beta/ablation_no_deadband
+  ablation_no_ema:
+    kind: lora
+    checkpoint: outputs/adaptive_beta/ablation_no_ema
+  ablation_no_clipping:
+    kind: lora
+    checkpoint: outputs/adaptive_beta/ablation_no_clipping
+
+comparisons:
+  - name: ablation_full_vs_sft
+    a: ablation_full
+    b: sft
+  - name: ablation_no_deadband_vs_sft
+    a: ablation_no_deadband
+    b: sft
+  - name: ablation_no_ema_vs_sft
+    a: ablation_no_ema
+    b: sft
+  - name: ablation_no_clipping_vs_sft
+    a: ablation_no_clipping
+    b: sft
+
+judges:
+  - name: primary
+    provider: openai
+    model: gpt-4o-mini
+    max_tokens: 64
+    temperature: 0.0
+
+output:
+  dir: research/results/phase3_ablation
+
