@@ -56,10 +56,21 @@ class AdaptiveDPOTrainer(DPOTrainer):
         loss = super().compute_loss(model, inputs, return_outputs=return_outputs, **kwargs)
         self.beta = old_beta
         # Log controller state if available
-        if self.accelerator.is_main_process:
+        if self.is_world_process_zero():
             state = self.beta_controller.state()
+            log_dict = {
+                "train/beta": state["beta"],
+                "train/kl_ema": state["kl_ema"],
+                "train/kl_batch": kl_batch,
+            }
             try:
-                self.accelerator.log({"train/beta": state["beta"], "train/kl_ema": state["kl_ema"], "train/kl_batch": kl_batch})
+                # Ensure logs reach W&B/other trackers via Trainer's logging pipeline.
+                self.log(log_dict)
+            except Exception:
+                pass
+            try:
+                # Still attempt direct accelerator logging for compatibility with custom trackers.
+                self.accelerator.log(log_dict, step=self.state.global_step)
             except Exception:
                 pass
         return loss
