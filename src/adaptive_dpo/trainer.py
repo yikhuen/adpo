@@ -10,9 +10,13 @@ class LoggingDPOTrainer(DPOTrainer):
     """Extension of TRL's DPOTrainer that logs KL statistics to Trainer trackers."""
 
     def __init__(self, *args, kl_log_alpha: float = 0.10, **kwargs):
+        self._fixed_beta_value = kwargs.pop("fixed_beta_value", None)
         self._kl_log_alpha = float(kl_log_alpha)
         self._kl_ema = 0.0
         super().__init__(*args, **kwargs)
+
+    def set_fixed_beta_value(self, value: Optional[float]):
+        self._fixed_beta_value = value
 
     def _pick_ids_and_mask(self, batch):
         # Try common TRL keys in order of preference
@@ -58,7 +62,7 @@ class LoggingDPOTrainer(DPOTrainer):
             beta_val = controller_state.get("beta")
             kl_ema = controller_state.get("kl_ema", kl_batch)
         else:
-            beta_val = getattr(self, "beta", None)
+            beta_val = self._fixed_beta_value if self._fixed_beta_value is not None else getattr(self, "beta", None)
             alpha = max(0.0, min(1.0, self._kl_log_alpha))
             self._kl_ema = (1.0 - alpha) * self._kl_ema + alpha * kl_batch
             kl_ema = self._kl_ema

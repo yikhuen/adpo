@@ -111,6 +111,7 @@ def _train_single_run(cfg: Dict[str, Any], seed: int, run_idx: int, total_runs: 
             max_length=int(tr_cfg.get("max_length", 1024)),
             max_prompt_length=int(tr_cfg.get("max_prompt_length", 512)),
             kl_log_alpha=kl_log_alpha,
+            fixed_beta_value=beta_init,
         )
     else:
         trainer = LoggingDPOTrainer(
@@ -123,6 +124,7 @@ def _train_single_run(cfg: Dict[str, Any], seed: int, run_idx: int, total_runs: 
             max_length=int(tr_cfg.get("max_length", 1024)),
             max_prompt_length=int(tr_cfg.get("max_prompt_length", 512)),
             kl_log_alpha=kl_log_alpha,
+            fixed_beta_value=beta_init,
         )
 
     # Optional beta scheduling baseline

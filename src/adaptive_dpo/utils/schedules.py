@@ -34,6 +34,9 @@ class AnnealedBetaCallback(TrainerCallback):
         if self.trainer is None:
             return
         setattr(self.trainer, self.cfg.target_attr, value)
+        set_fixed = getattr(self.trainer, "set_fixed_beta_value", None)
+        if callable(set_fixed):
+            set_fixed(value)
         accelerator = getattr(self.trainer, "accelerator", None)
         if accelerator is not None and getattr(accelerator, "is_main_process", True):
             try:
