@@ -44,6 +44,11 @@ judges:
     model: gpt-4o-mini
     max_tokens: 64
     temperature: 0.0
+  - name: secondary
+    provider: gemini
+    model: gemini-1.5-flash
+    max_tokens: 64
+    temperature: 0.0
 
 output:
   dir: research/results/phase3_ablation

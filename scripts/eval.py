@@ -177,6 +177,29 @@ class PairwiseJudge:
                 max_retries=max_retries,
             )
             self.kwargs = cfg
+        elif self.provider == "gemini":
+            try:
+                import google.generativeai as genai
+            except ImportError as exc:  # pragma: no cover
+                raise RuntimeError("google-generativeai must be installed for Gemini judges.") from exc
+
+            api_key = cfg.get("api_key") or os.environ.get("GEMINI_API_KEY")
+            if not api_key:
+                raise RuntimeError("GEMINI_API_KEY not set for Gemini judge.")
+
+            genai.configure(api_key=api_key)
+            model_name = self.model_name or cfg.get("model")
+            if not model_name:
+                model_name = "gemini-1.5-flash"
+            generation_config = cfg.get("generation_config")
+            safety_settings = cfg.get("safety_settings")
+            init_kwargs: Dict[str, Any] = {"model_name": model_name}
+            if generation_config:
+                init_kwargs["generation_config"] = generation_config
+            if safety_settings:
+                init_kwargs["safety_settings"] = safety_settings
+            self.gemini_client = genai.GenerativeModel(**init_kwargs)
+            self.gemini_kwargs = cfg
         elif self.provider == "hf_causal":
             if not self.model_name:
                 raise ValueError("hf_causal judge requires 'model' identifier.")
@@ -233,16 +256,25 @@ class PairwiseJudge:
                         continue
                     else:
                         raise
+        elif self.provider == "gemini":
+            response = self.gemini_client.generate_content(formatted)
+            text = getattr(response, "text", "") or ""
+            if not text and getattr(response, "candidates", None):
+                try:
+                    text = response.candidates[0].content.parts[0].text
+                except (IndexError, AttributeError):
+                    text = ""
+            return self._parse_choice(text)
 
         # hf_causal
         input_text = formatted
         if self.system_prompt:
             input_text = f"{self.system_prompt.strip()}\n\n{input_text}"
         inputs = self.tokenizer(input_text, return_tensors="pt").to(self.model.device)
-        with torch.no_grad():
+    with torch.no_grad():
             outputs = self.model.generate(
-                **inputs,
-                do_sample=False,
+            **inputs,
+            do_sample=False,
                 temperature=self.temperature,
                 max_new_tokens=self.max_tokens,
             )
@@ -495,6 +527,58 @@ def log_results_to_wandb(
 
                     run.log({chart_name: wandb.Image(fig)}, commit=False)
                     plt.close(fig)
+
+    matrix_cfg = wandb_cfg.get("matrix", {})
+    if matrix_cfg.get("enabled"):
+        cell_mapping = matrix_cfg.get("cell_mapping")
+        if not isinstance(cell_mapping, dict):
+            typer.echo("[eval] wandb matrix logging requires 'cell_mapping'; skipping.")
+        else:
+            judge = matrix_cfg.get("judge")
+            if not judge and metrics_summary:
+                first_metrics = next(iter(metrics_summary.values()))
+                judge = next(iter(first_metrics.keys()), None)
+            if not judge:
+                typer.echo("[eval] No judge specified for wandb matrix; skipping.")
+            else:
+                rows = matrix_cfg.get("rows") or sorted(
+                    {cell.get("row") for cell in cell_mapping.values() if isinstance(cell, dict) and "row" in cell}
+                )
+                cols = matrix_cfg.get("cols") or sorted(
+                    {cell.get("col") for cell in cell_mapping.values() if isinstance(cell, dict) and "col" in cell}
+                )
+                if not rows or not cols:
+                    typer.echo("[eval] Wandb matrix logging requires non-empty rows/cols; skipping.")
+                else:
+                    value_key = matrix_cfg.get("value_key", "win_rate")
+                    default_val = float("nan")
+                    matrix_values: Dict[Tuple[str, str], float] = {}
+                    for comparison_name, cell in cell_mapping.items():
+                        if (
+                            comparison_name not in metrics_summary
+                            or not isinstance(cell, dict)
+                            or "row" not in cell
+                            or "col" not in cell
+                        ):
+                            continue
+                        metric_entry = metrics_summary[comparison_name].get(judge)
+                        if not metric_entry:
+                            continue
+                        matrix_values[(cell["row"], cell["col"])] = float(metric_entry.get(value_key, default_val))
+
+                    heatmap_table = wandb.Table(columns=["row", "col", value_key])
+                    matrix_table = wandb.Table(columns=["row"] + list(cols))
+                    for row_label in rows:
+                        row_values: List[float] = []
+                        for col_label in cols:
+                            value = matrix_values.get((row_label, col_label), default_val)
+                            heatmap_table.add_data(row_label, col_label, value)
+                            row_values.append(value)
+                        matrix_table.add_data(row_label, *row_values)
+
+                    heatmap_key = matrix_cfg.get("name", "eval/generalization_heatmap")
+                    run.log({heatmap_key: wandb.plot.heatmap(heatmap_table, "row", "col", value_key)}, commit=False)
+                    run.log({f"{heatmap_key}_table": matrix_table}, commit=False)
 
     artifact_name = wandb_cfg.get("artifact_name", "eval-metrics")
     artifact_type = wandb_cfg.get("artifact_type", "evaluation")

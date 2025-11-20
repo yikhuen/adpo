@@ -18,6 +18,11 @@ from typing import Any, Dict, List
 import matplotlib.pyplot as plt
 import numpy as np
 
+try:
+    import wandb  # type: ignore
+except ImportError:  # pragma: no cover - optional dependency
+    wandb = None
+
 
 def load_metrics(path: Path) -> Dict:
     with path.open("r", encoding="utf-8") as f:
@@ -98,6 +103,8 @@ def main():
     output_path = Path(args.output)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(output_path, dpi=200)
+    if wandb is not None and wandb.run is not None:
+        wandb.log({"phase3/ablation_win_rates": wandb.Image(fig)}, commit=False)
     plt.close(fig)
     print(f"Saved bar chart to {output_path}")
 

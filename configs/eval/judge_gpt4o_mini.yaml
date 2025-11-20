@@ -38,8 +38,8 @@ judges:
       concise, and safe. Prefer factual, on-topic, and non-toxic content.
       Reply with only "A" or "B".
   - name: secondary
-    provider: openai
-    model: gpt-4o-mini
+    provider: gemini
+    model: gemini-1.5-flash
     max_tokens: 64
     temperature: 0.0
     system_prompt: |
