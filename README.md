@@ -122,7 +122,7 @@ Speed tips:
 python scripts/orchestrate.py phase1
 
 # Phase 2: adaptive vs oracle vs annealed + evaluation
-python scripts/orchestrate.py phase2
+python scripts/orchestrate.py phase2 --oracle-beta 0.12  # optional override (e.g., best fixed β from Phase 1)
 
 # Phase 3: ablation stress test (toggle EMA/deadband/clipping)
 python scripts/orchestrate.py phase3
@@ -131,6 +131,8 @@ python scripts/orchestrate.py phase3
 python scripts/orchestrate.py phase4 --eval-config configs/eval/generalization.yaml
 ```
 Results for each phase (training stats, evaluation metrics) are stored in `research/results/<phase>/`.
+
+- The `--oracle-beta` flag lets you inject the “best” fixed β identified in Phase 1 (or a dataset-specific value) so the Phase 2 oracle baseline trains with that exact setting and logs under a beta-specific subfolder.
 
 ## 9) Save and copy results off the pod
 ```bash

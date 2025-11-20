@@ -120,6 +120,10 @@ def phase2(
     ),
     include_fixed_beta: bool = typer.Option(True, help="Run the fixed-beta baseline as part of phase 2."),
     force_eval: bool = typer.Option(False, help="Force re-run evaluation even if cached."),
+    oracle_beta: Optional[float] = typer.Option(
+        None,
+        help="Override the fixed-beta baseline with the supplied beta value (e.g. best from Phase 1).",
+    ),
 ):
     """Run Phase 2 adaptive vs baselines and evaluate."""
     phase_dir = _phase_output_dir("phase2_adaptive_vs_baselines")
@@ -133,7 +137,18 @@ def phase2(
 
     for label, path in configs:
         cfg = _load_yaml(path)
-        run_output = Path(cfg["trainer"].get("output_dir", f"outputs/{label}"))
+        trainer_cfg = cfg.setdefault("trainer", {})
+        run_output = Path(trainer_cfg.get("output_dir", f"outputs/{label}"))
+
+        if label == "fixed" and oracle_beta is not None:
+            beta_value = float(oracle_beta)
+            cfg["fixed_beta"] = beta_value
+            beta_slug = _slug(f"{beta_value:.3f}")
+            run_output = run_output / f"beta_{beta_slug}"
+            trainer_cfg["output_dir"] = str(run_output)
+            existing_name = trainer_cfg.get("run_name")
+            trainer_cfg["run_name"] = (existing_name + f"_beta_{beta_slug}") if existing_name else f"phase2_fixed_beta_{beta_slug}"
+
         if len(cfg.get("seeds", [])) <= 1:
             cfg["seeds"] = cfg.get("seeds", [cfg.get("seed", 42)])
         config_path = _write_config(cfg, f"phase2_{label}.yaml")
