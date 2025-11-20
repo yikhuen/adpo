@@ -130,7 +130,7 @@ Speed tips:
 python scripts/orchestrate.py phase1
 
 # Phase 2: adaptive vs oracle vs annealed + evaluation (single command, auto-logs to W&B)
-python scripts/orchestrate.py phase2 --oracle-beta 0.12
+python scripts/orchestrate.py phase2 --oracle-beta 0.2
 
 # Phase 3: ablation stress test (toggle EMA/deadband/clipping)
 python scripts/orchestrate.py phase3
