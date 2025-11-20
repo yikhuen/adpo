@@ -30,19 +30,38 @@ python3 -m venv .venv && source .venv/bin/activate
 pip install --upgrade pip
 # PyTorch is already in the image; just install the project deps
 pip install -r requirements.txt --no-cache-dir
+
+# Set PYTHONPATH so scripts can import adaptive_dpo module
+export PYTHONPATH=$PWD/src:$PYTHONPATH
+# (Add this to ~/.bashrc or run it each time you start a new terminal session)
 ```
 
 ## 4) Environment variables (.env)
 Create and load once per session:
 ```bash
-cat > .env << 'EOF'
+# On your local machine, create a file named .env with the following contents:
+# (edit to add your keys before uploading)
 WANDB_API_KEY=YOUR_WANDB_KEY
 WANDB_PROJECT=adaptive-dpo
 OPENAI_API_KEY=YOUR_OPENAI_KEY
+GEMINI_API_KEY=YOUR_GEMINI_KEY
 HF_HUB_ENABLE_HF_TRANSFER=1
 HF_DATASETS_DISABLE_MULTIPROCESSING=1
 PYTHONHASHSEED=42
-EOF
+
+# Then copy (upload) it to the GPU with:
+# Replace <PUBLIC_IP>, <PORT>, and <SSH_KEY> with your actual values
+scp -P <PORT> -i ~/.ssh/<SSH_KEY> .env root@<PUBLIC_IP>:~/adpo/.env
+
+# (Adjust the path if you're using a different working directory or repo folder)
+# Now, once connected to the GPU terminal:
+# 1. Check for carriage returns or whitespace issues:
+cat -vet .env
+
+# 2. Remove carriage returns and trailing whitespace if needed:
+sed -i 's/\r$//' .env
+
+# 3. Load the environment variables:
 set -a && source .env && set +a
 ```
 
