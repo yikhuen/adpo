@@ -19,7 +19,7 @@ from trl import DPOConfig, DPOTrainer
 from adaptive_dpo.beta_controller import AdaptiveBetaController, BetaControllerConfig
 from adaptive_dpo.data import load_preference_dataset, load_ultrafeedback_subset_formatted
 from adaptive_dpo.modeling import load_qwen25_7b
-from adaptive_dpo.trainer import AdaptiveDPOTrainer
+from adaptive_dpo.trainer import AdaptiveDPOTrainer, LoggingDPOTrainer
 from adaptive_dpo.utils.repro import set_global_seed
 from adaptive_dpo.utils.schedules import AnnealedBetaCallback, AnnealedBetaConfig
 
@@ -97,6 +97,8 @@ def _train_single_run(cfg: Dict[str, Any], seed: int, run_idx: int, total_runs: 
         controller = AdaptiveBetaController(bc_cfg)
         beta_init = bc_cfg.beta_init
 
+    kl_log_alpha = float(tr_cfg.get("kl_log_alpha", 0.10))
+
     if controller:
         trainer: DPOTrainer = AdaptiveDPOTrainer(
             beta_controller=controller,
@@ -108,9 +110,10 @@ def _train_single_run(cfg: Dict[str, Any], seed: int, run_idx: int, total_runs: 
             tokenizer=tokenizer,
             max_length=int(tr_cfg.get("max_length", 1024)),
             max_prompt_length=int(tr_cfg.get("max_prompt_length", 512)),
+            kl_log_alpha=kl_log_alpha,
         )
     else:
-        trainer = DPOTrainer(
+        trainer = LoggingDPOTrainer(
             model=model,
             ref_model=ref_model,
             args=args,
@@ -119,6 +122,7 @@ def _train_single_run(cfg: Dict[str, Any], seed: int, run_idx: int, total_runs: 
             tokenizer=tokenizer,
             max_length=int(tr_cfg.get("max_length", 1024)),
             max_prompt_length=int(tr_cfg.get("max_prompt_length", 512)),
+            kl_log_alpha=kl_log_alpha,
         )
 
     # Optional beta scheduling baseline

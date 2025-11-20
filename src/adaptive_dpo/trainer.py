@@ -1,15 +1,18 @@
-from typing import Dict, Any
-import math
+from typing import Any, Dict, Optional
+
 import torch
 from trl import DPOTrainer
 
 from .beta_controller import AdaptiveBetaController
 
 
-class AdaptiveDPOTrainer(DPOTrainer):
-    def __init__(self, beta_controller: AdaptiveBetaController, *args, **kwargs):
+class LoggingDPOTrainer(DPOTrainer):
+    """Extension of TRL's DPOTrainer that logs KL statistics to Trainer trackers."""
+
+    def __init__(self, *args, kl_log_alpha: float = 0.10, **kwargs):
+        self._kl_log_alpha = float(kl_log_alpha)
+        self._kl_ema = 0.0
         super().__init__(*args, **kwargs)
-        self.beta_controller = beta_controller
 
     def _pick_ids_and_mask(self, batch):
         # Try common TRL keys in order of preference
@@ -47,30 +50,62 @@ class AdaptiveDPOTrainer(DPOTrainer):
         diff = (pol_tok - ref_tok)
         return diff.mean().clamp_min(0.0).item()
 
+    def _log_metrics(self, kl_batch: float, controller_state: Optional[Dict[str, Any]] = None):
+        if not self.is_world_process_zero():
+            return
+
+        if controller_state is not None:
+            beta_val = controller_state.get("beta")
+            kl_ema = controller_state.get("kl_ema", kl_batch)
+        else:
+            beta_val = getattr(self, "beta", None)
+            alpha = max(0.0, min(1.0, self._kl_log_alpha))
+            self._kl_ema = (1.0 - alpha) * self._kl_ema + alpha * kl_batch
+            kl_ema = self._kl_ema
+
+        log_dict: Dict[str, Any] = {
+            "train/kl_batch": kl_batch,
+            "train/kl_ema": kl_ema,
+        }
+        if beta_val is None:
+            beta_attr = getattr(self, "beta", None)
+            if beta_attr is not None:
+                log_dict["train/beta"] = float(beta_attr)
+        else:
+            log_dict["train/beta"] = float(beta_val)
+
+        try:
+            self.log(log_dict)
+        except Exception:
+            pass
+        accelerator = getattr(self, "accelerator", None)
+        if accelerator is not None:
+            try:
+                accelerator.log(log_dict, step=self.state.global_step)
+            except Exception:
+                pass
+
+    def compute_loss(self, model, inputs, return_outputs=False, **kwargs):
+        kl_override = kwargs.pop("_kl_override", None)
+        kl_batch = kl_override if kl_override is not None else self._kl_per_token_on_prompt(inputs)
+        loss = super().compute_loss(model, inputs, return_outputs=return_outputs, **kwargs)
+        self._log_metrics(kl_batch)
+        return loss
+
+
+class AdaptiveDPOTrainer(LoggingDPOTrainer):
+    def __init__(self, beta_controller: AdaptiveBetaController, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.beta_controller = beta_controller
+
     def compute_loss(self, model, inputs, return_outputs=False, **kwargs):
         # Update beta from KL estimate
         kl_batch = self._kl_per_token_on_prompt(inputs)
         beta = self.beta_controller.update(kl_batch)
         old_beta = getattr(self, "beta", None)
         self.beta = beta
-        loss = super().compute_loss(model, inputs, return_outputs=return_outputs, **kwargs)
+        loss = DPOTrainer.compute_loss(self, model, inputs, return_outputs=return_outputs, **kwargs)
         self.beta = old_beta
-        # Log controller state if available
-        if self.is_world_process_zero():
-            state = self.beta_controller.state()
-            log_dict = {
-                "train/beta": state["beta"],
-                "train/kl_ema": state["kl_ema"],
-                "train/kl_batch": kl_batch,
-            }
-            try:
-                # Ensure logs reach W&B/other trackers via Trainer's logging pipeline.
-                self.log(log_dict)
-            except Exception:
-                pass
-            try:
-                # Still attempt direct accelerator logging for compatibility with custom trackers.
-                self.accelerator.log(log_dict, step=self.state.global_step)
-            except Exception:
-                pass
+        controller_state = self.beta_controller.state() if self.is_world_process_zero() else None
+        self._log_metrics(kl_batch, controller_state=controller_state)
         return loss
