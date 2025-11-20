@@ -83,7 +83,10 @@ class BetaControllerConfig:
     deadband_ratio: float = 0.15  # ±15% tolerance
     
     # LOGIC FLAGS
-    use_hybrid_sensor: bool = True # If True, reacts to max(batch, ema)
+    use_hybrid_sensor: bool = True  # If True, reacts to max(batch, ema)
+    use_ema: bool = True
+    use_deadband: bool = True
+    use_clipping: bool = True
 
 class AdaptiveBetaController:
     def __init__(self, cfg: BetaControllerConfig):
