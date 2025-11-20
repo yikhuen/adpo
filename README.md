@@ -109,6 +109,14 @@ Artifacts land in `research/results/eval/`:
 - `decisions/*.jsonl` – per-judge pairwise choices
 - `metrics/summary.json` & `summary.csv` – win rates + 95% CIs
 - `metrics/judge_agreement.json` – agreement %, Cohen’s κ (when ≥2 judges)
+- `metrics/model_stats.json` – reward-hacking sanity check: Avg response length, refusal/safety rates per model
+- Generate a bar chart locally (also logged to W&B automatically):
+  ```bash
+  python scripts/plot_response_length_bar.py \
+    --model-stats research/results/eval/metrics/model_stats.json \
+    --metric avg_length_chars \
+    --output research/results/eval/response_length_bar.png
+  ```
 
 Speed tips:
 - Smaller dev set: `python scripts/prepare_dev_set.py --size 50 ...`
@@ -121,8 +129,8 @@ Speed tips:
 # Phase 1: fixed-β brittleness grid (β = 0.05, 0.10, 0.20)
 python scripts/orchestrate.py phase1
 
-# Phase 2: adaptive vs oracle vs annealed + evaluation
-python scripts/orchestrate.py phase2 --oracle-beta 0.12  # optional override (e.g., best fixed β from Phase 1)
+# Phase 2: adaptive vs oracle vs annealed + evaluation (single command, auto-logs to W&B)
+python scripts/orchestrate.py phase2 --oracle-beta 0.12
 
 # Phase 3: ablation stress test (toggle EMA/deadband/clipping)
 python scripts/orchestrate.py phase3
@@ -133,6 +141,7 @@ python scripts/orchestrate.py phase4 --eval-config configs/eval/generalization.y
 Results for each phase (training stats, evaluation metrics) are stored in `research/results/<phase>/`.
 
 - The `--oracle-beta` flag lets you inject the “best” fixed β identified in Phase 1 (or a dataset-specific value) so the Phase 2 oracle baseline trains with that exact setting and logs under a beta-specific subfolder.
+- Phase 2 evaluation now runs at the end of the command and pushes win rates, judge agreement, response-length sanity checks, and model stats directly to W&B (artifacts + panels). Local files remain as cache only.
 
 ## 9) Save and copy results off the pod
 ```bash

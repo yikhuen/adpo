@@ -436,6 +436,8 @@ def log_results_to_wandb(
     csv_path: Path,
     prompt_count: int,
     config_path: str,
+    model_stats: Dict[str, Dict[str, float]],
+    model_stats_path: Optional[Path],
 ):
     wandb_cfg = cfg.get("wandb", {})
     if not wandb_cfg.get("enabled"):
@@ -503,6 +505,38 @@ def log_results_to_wandb(
                     metric_entry["model_b"],
                 )
         run.log({"eval/summary_table": table}, commit=False)
+
+    if model_stats:
+        stats_table = wandb.Table(
+            columns=["model", "avg_length_chars", "refusal_rate", "safety_rate", "responses"]
+        )
+        model_names = []
+        avg_lengths = []
+        for model_name, stats in model_stats.items():
+            stats_table.add_data(
+                model_name,
+                stats.get("avg_length_chars", float("nan")),
+                stats.get("refusal_rate", float("nan")),
+                stats.get("safety_rate", float("nan")),
+                int(stats.get("count", 0)),
+            )
+            model_names.append(model_name)
+            avg_lengths.append(stats.get("avg_length_chars", float("nan")))
+        run.log({"eval/model_stats_table": stats_table}, commit=False)
+
+        try:
+            import matplotlib.pyplot as plt
+        except ImportError:
+            typer.echo("[eval] matplotlib not installed; skipping response length bar chart.")
+        else:
+            fig, ax = plt.subplots(figsize=(6, 4))
+            ax.bar(model_names, avg_lengths, color="#55A868")
+            ax.set_ylabel("Avg Response Length (chars)")
+            ax.set_title("Response Length Sanity Check")
+            ax.set_xticklabels(model_names, rotation=20)
+            fig.tight_layout()
+            run.log({"eval/avg_response_length": wandb.Image(fig)}, commit=False)
+            plt.close(fig)
 
     bar_cfg = wandb_cfg.get("bar_chart", {})
     if bar_cfg.get("enabled"):
@@ -586,6 +620,8 @@ def log_results_to_wandb(
     artifact = wandb.Artifact(full_artifact_name, type=artifact_type)
     artifact.add_file(str(summary_path), name="summary.json")
     artifact.add_file(str(csv_path), name="summary.csv")
+    if model_stats_path is not None and model_stats:
+        artifact.add_file(str(model_stats_path), name="model_stats.json")
     run.log_artifact(artifact)
 
     run.finish()
@@ -623,6 +659,28 @@ def main(
         responses[model_name] = records
         typer.echo(f"[eval] Model '{model_name}' responses ready ({time.time()-start:.1f}s)")
 
+    # Compute per-model stats for reward hacking sanity checks
+    model_level_stats: Dict[str, Dict[str, float]] = {}
+    for model_name, records in responses.items():
+        total_length = 0
+        safety_flags = 0
+        refusals = 0
+        for record in records:
+            text = record.get("response", "")
+            total_length += len(text)
+            metadata = record.get("metadata") or {}
+            if metadata.get("safety_flag"):
+                safety_flags += 1
+            if metadata.get("refused"):
+                refusals += 1
+        count = max(1, len(records))
+        model_level_stats[model_name] = {
+            "count": count,
+            "avg_length_chars": total_length / count,
+            "safety_rate": safety_flags / count,
+            "refusal_rate": refusals / count,
+        }
+
     # Prepare judges
     judges = [PairwiseJudge(entry) for entry in cfg.get("judges", [])]
     if not judges:
@@ -649,6 +707,7 @@ def main(
             metric_entry = judge_metrics[comparison["name"]]
             per_judge_decisions[judge_name][comparison["name"]] = metric_entry
             metrics_summary.setdefault(comparison["name"], {})[judge_name] = metric_entry
+
 
     # Save summary metrics
     summary_path = metrics_dir / "summary.json"
@@ -686,6 +745,13 @@ def main(
                 )
     typer.echo(f"[eval] Wrote metrics CSV to {csv_path}")
 
+    model_stats_path = None
+    if model_level_stats:
+        model_stats_path = metrics_dir / "model_stats.json"
+        with model_stats_path.open("w", encoding="utf-8") as f:
+            json.dump(model_level_stats, f, indent=2)
+        typer.echo(f"[eval] Wrote model-level stats to {model_stats_path}")
+
     log_results_to_wandb(
         cfg,
         metrics_summary,
@@ -693,6 +759,8 @@ def main(
         csv_path,
         prompt_count=len(prompts),
         config_path=config,
+        model_stats=model_level_stats,
+        model_stats_path=model_stats_path,
     )
 
     # Judge agreement

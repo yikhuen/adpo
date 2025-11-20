@@ -9,14 +9,17 @@ generation:
   cache: true
 
 models:
-  base:
-    kind: base
   adaptive:
     kind: lora
     checkpoint: outputs/adaptive_beta
   fixed:
     kind: lora
     checkpoint: outputs/fixed_beta
+  annealed:
+    kind: lora
+    checkpoint: outputs/annealed_beta
+  base:
+    kind: base
 
 comparisons:
   - name: adaptive_vs_base
@@ -25,6 +28,16 @@ comparisons:
   - name: adaptive_vs_fixed
     a: adaptive
     b: fixed
+  - name: annealed_vs_base
+    a: annealed
+    b: base
+  - name: annealed_vs_fixed
+    a: annealed
+    b: fixed
+  - name: adaptive_vs_annealed
+    a: adaptive
+    b: annealed
+
 
 judges:
   - name: primary
