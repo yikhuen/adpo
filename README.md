@@ -216,17 +216,15 @@ scp -P <PORT> -i ~/.ssh/id_rsa root@<PUBLIC_IP>:~/adpo/results.tgz \
   python scripts/eval.py all-judges --force-judge
   ```
   These configs log Phase 2 metrics, reward-hacking diagnostics, and plots to W&B automatically; set `WANDB_API_KEY` before running.
-- **Hybrid entropy-adaptive controller:** Phase 2 now uses a hybrid PID controller that multiplies a slow EMA (integral term) with a fast entropy spike (proportional term). The baseline beta evolves as  
-  $\beta_{base}^{t+1} = \beta_{base}^{t} \times (1 + \alpha_{rate})$ when $KL_{est} > KL_{target}$ (and divides by the same factor otherwise).  
-  At each batch we also compute a normalized entropy scalar  
-  $\text{scalar}_{ent} = 1 + \lambda \cdot \frac{\text{Entropy}_{batch}}{\log |V|}$, ignoring padding tokens.  
-  The actual DPO weight is $\beta_{total} = \beta_{base} \cdot \text{scalar}_{ent}$, optionally with an entropy warm-up period. Configure it via:
+- **Robust hybrid controller:** Phase 2 now defaults to the robust hybrid PID controller. It keeps the EMA/“hybrid sensor” baseline but injects an entropy spike with a larger sensitivity range ($\lambda=5$) and a short warm-up. Baseline update:
+  $\beta_{base}^{t+1} = \beta_{base}^{t} \cdot \exp(\eta \cdot \frac{KL_{sensor}-KL_{target}}{KL_{target}})$ whenever the KL deviates outside a ±deadband. The proportional term scales by
+  $1 + \lambda \cdot \frac{\text{Entropy}_{batch}}{\log |V|}$. Configure it via:
   ```yaml
   beta_controller:
-    kind: hybrid_entropy
-    target_kl: 0.03
-    alpha_rate: 0.01
-    lambda_entropy: 1.0
+    kind: robust_hybrid
+    target_kl: 0.05
+    eta: 1.0
+    lambda_entropy: 5.0
     vocab_size: 32000
     entropy_warmup_steps: 200
     beta_init: 0.10

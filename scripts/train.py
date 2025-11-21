@@ -21,6 +21,8 @@ from adaptive_dpo.beta_controller import (
     BetaControllerConfig,
     HybridAdaptiveKLController,
     HybridControllerConfig,
+    RobustHybridConfig,
+    RobustHybridController,
 )
 from adaptive_dpo.data import load_preference_dataset, load_ultrafeedback_subset_formatted
 from adaptive_dpo.modeling import load_qwen25_7b
@@ -194,6 +196,10 @@ def _train_single_run(cfg: Dict[str, Any], seed: int, run_idx: int, total_runs: 
             hc_cfg = HybridControllerConfig(**controller_payload)
             controller = HybridAdaptiveKLController(hc_cfg)
             beta_init = hc_cfg.beta_init
+        elif controller_kind == "robust_hybrid":
+            rh_cfg = RobustHybridConfig(**controller_payload)
+            controller = RobustHybridController(rh_cfg)
+            beta_init = rh_cfg.beta_init
         else:
             bc_cfg = BetaControllerConfig(**controller_payload)
             controller = AdaptiveBetaController(bc_cfg)
