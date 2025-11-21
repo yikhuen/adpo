@@ -191,6 +191,9 @@ class PairwiseJudge:
             model_name = self.model_name or cfg.get("model")
             if not model_name:
                 model_name = "gemini-1.5-flash"
+            # Strip 'models/' prefix if accidentally included
+            if model_name.startswith("models/"):
+                model_name = model_name[7:]
             generation_config = cfg.get("generation_config")
             safety_settings = cfg.get("safety_settings")
             init_kwargs: Dict[str, Any] = {}
