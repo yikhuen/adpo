@@ -193,12 +193,12 @@ class PairwiseJudge:
                 model_name = "gemini-1.5-flash"
             generation_config = cfg.get("generation_config")
             safety_settings = cfg.get("safety_settings")
-            init_kwargs: Dict[str, Any] = {"model_name": model_name}
+            init_kwargs: Dict[str, Any] = {}
             if generation_config:
                 init_kwargs["generation_config"] = generation_config
             if safety_settings:
                 init_kwargs["safety_settings"] = safety_settings
-            self.gemini_client = genai.GenerativeModel(**init_kwargs)
+            self.gemini_client = genai.GenerativeModel(model_name, **init_kwargs)
             self.gemini_kwargs = cfg
         elif self.provider == "hf_causal":
             if not self.model_name:
