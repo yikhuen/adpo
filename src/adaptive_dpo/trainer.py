@@ -1,10 +1,7 @@
-from typing import Any, Dict, Optional, List
+from typing import Any, Dict, Optional, List, Tuple
 
 import torch
 from trl import DPOTrainer
-
-from .beta_controller import AdaptiveBetaController
-
 
 class LoggingDPOTrainer(DPOTrainer):
     """Extension of TRL's DPOTrainer that logs KL statistics to Trainer trackers."""
@@ -54,6 +51,25 @@ class LoggingDPOTrainer(DPOTrainer):
         # KL approx via logprob difference expectation; clamp at 0
         diff = (pol_tok - ref_tok)
         return diff.mean().clamp_min(0.0).item()
+
+    @torch.no_grad()
+    def _kl_with_policy_logits(self, batch) -> Tuple[float, Optional[torch.Tensor], Optional[torch.Tensor]]:
+        input_ids, attention_mask = self._pick_ids_and_mask(batch)
+        if input_ids is None:
+            return 0.0, None, None
+        policy_outputs = self.model(input_ids=input_ids, attention_mask=attention_mask)
+        policy_logits = policy_outputs.logits.float().detach()
+        if self.ref_model is None:
+            return 0.0, policy_logits, attention_mask
+        ref_outputs = self.ref_model(input_ids=input_ids, attention_mask=attention_mask)
+        pol_lp = torch.log_softmax(policy_logits, dim=-1)
+        ref_lp = torch.log_softmax(ref_outputs.logits.float(), dim=-1)
+        tgt = input_ids.unsqueeze(-1)
+        pol_tok = pol_lp.gather(-1, tgt).squeeze(-1)
+        ref_tok = ref_lp.gather(-1, tgt).squeeze(-1)
+        diff = (pol_tok - ref_tok)
+        kl = diff.mean().clamp_min(0.0).item()
+        return kl, policy_logits, attention_mask
 
     def _log_metrics(self, kl_batch: float, controller_state: Optional[Dict[str, Any]] = None):
         if not self.is_world_process_zero():
@@ -108,14 +124,27 @@ class LoggingDPOTrainer(DPOTrainer):
 
 
 class AdaptiveDPOTrainer(LoggingDPOTrainer):
-    def __init__(self, beta_controller: AdaptiveBetaController, *args, **kwargs):
+    def __init__(self, beta_controller: Any, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.beta_controller = beta_controller
 
     def compute_loss(self, model, inputs, return_outputs=False, **kwargs):
         # Update beta from KL estimate
-        kl_batch = self._kl_per_token_on_prompt(inputs)
-        beta = self.beta_controller.update(kl_batch)
+        requires_entropy = getattr(self.beta_controller, "requires_entropy", False)
+        if requires_entropy:
+            kl_batch, policy_logits, attention_mask = self._kl_with_policy_logits(inputs)
+            if policy_logits is None:
+                beta = self.beta_controller.update(kl_batch)
+            else:
+                beta = self.beta_controller.update(
+                    kl_batch,
+                    batch_logits=policy_logits,
+                    attention_mask=attention_mask,
+                    global_step=getattr(self.state, "global_step", 0),
+                )
+        else:
+            kl_batch = self._kl_per_token_on_prompt(inputs)
+            beta = self.beta_controller.update(kl_batch)
         old_beta = getattr(self, "beta", None)
         self.beta = beta
         loss = DPOTrainer.compute_loss(self, model, inputs, return_outputs=return_outputs, **kwargs)

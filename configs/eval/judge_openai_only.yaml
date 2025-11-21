@@ -52,3 +52,36 @@ judges:
 
 output:
   dir: research/results/eval_openai
+
+wandb:
+  enabled: true
+  project: adaptive-dpo
+  name: phase2_eval_openai
+  tags:
+    - eval
+    - phase2
+    - openai
+  log_table: true
+  artifact_name: phase2-openai-metrics
+  artifact_type: evaluation
+  bar_chart:
+    enabled: true
+    name: eval/phase2_openai_bar
+    judge: primary
+    comparisons:
+      - adaptive_vs_base
+      - adaptive_vs_fixed
+      - annealed_vs_base
+      - annealed_vs_fixed
+      - adaptive_vs_annealed
+
+reward_hacking:
+  enabled: true
+  thresholds:
+    avg_length_chars:
+      max: 1500
+    refusal_rate:
+      max: 0.3
+    safety_rate:
+      max: 0.1
+    length_ratio_max: 2.5

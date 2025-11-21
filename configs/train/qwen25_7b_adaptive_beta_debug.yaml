@@ -16,16 +16,15 @@ dataset:
   sample_frac: 0.0005
 
 beta_controller:
-  kl_target: 0.03
-  eta: 0.02
-  ema_alpha: 0.10
+  kind: hybrid_entropy
+  target_kl: 0.03
+  alpha_rate: 0.01
+  lambda_entropy: 1.0
+  vocab_size: 32000
+  entropy_warmup_steps: 50
   beta_init: 0.10
   beta_min: 0.02
   beta_max: 3.0
-  deadband_ratio: 0.20
-  use_ema: true
-  use_deadband: true
-  use_clipping: true
 
 trainer:
   per_device_train_batch_size: 1

@@ -109,7 +109,7 @@ python scripts/eval.py gemini-judge --force-judge
 # Both judges (default Phase 2 setting)
 python scripts/eval.py all-judges --force-judge
 ```
-Each shortcut loads a default config (`configs/eval/judge_openai_only.yaml`, `configs/eval/judge_gemini_only.yaml`, or `configs/eval/judge_gpt4o_mini.yaml`), which you can override with `--config path/to/config.yaml`.
+Each shortcut loads a default config (`configs/eval/judge_openai_only.yaml`, `configs/eval/judge_gemini_only.yaml`, or `configs/eval/judge_gpt4o_mini.yaml`), which you can override with `--config path/to/config.yaml`. All three configs enable W&B logging by default, so summary tables and response-length bar charts are pushed automatically (set `WANDB_API_KEY` first).
 
 Artifacts land in the directory specified by the chosen config (defaults: `research/results/eval/`, `research/results/eval_openai/`, `research/results/eval_gemini/`):
 - `responses/*.jsonl` – per-model generations stripped of prompts
@@ -117,6 +117,10 @@ Artifacts land in the directory specified by the chosen config (defaults: `resea
 - `metrics/summary.json` & `summary.csv` – win rates + 95% CIs
 - `metrics/judge_agreement.json` – agreement %, Cohen’s κ (when ≥2 judges)
 - `metrics/model_stats.json` – reward-hacking sanity check: Avg response length, refusal/safety rates per model
+- `metrics/reward_hacking.json` – heuristic flags comparing those stats against configurable thresholds
+
+Adjust the thresholds via the `reward_hacking.thresholds` block in any eval config (e.g., raise `avg_length_chars.max` if your generations are longer by design).
+
 - Generate a bar chart locally (also logged to W&B automatically):
   ```bash
   python scripts/plot_response_length_bar.py \
@@ -211,6 +215,23 @@ scp -P <PORT> -i ~/.ssh/id_rsa root@<PUBLIC_IP>:~/adpo/results.tgz \
   python scripts/eval.py gemini-judge --force-judge
   python scripts/eval.py all-judges --force-judge
   ```
+  These configs log Phase 2 metrics, reward-hacking diagnostics, and plots to W&B automatically; set `WANDB_API_KEY` before running.
+- **Hybrid entropy-adaptive controller:** Phase 2 now uses a hybrid PID controller that multiplies a slow EMA (integral term) with a fast entropy spike (proportional term). The baseline beta evolves as  
+  $\beta_{base}^{t+1} = \beta_{base}^{t} \times (1 + \alpha_{rate})$ when $KL_{est} > KL_{target}$ (and divides by the same factor otherwise).  
+  At each batch we also compute a normalized entropy scalar  
+  $\text{scalar}_{ent} = 1 + \lambda \cdot \frac{\text{Entropy}_{batch}}{\log |V|}$, ignoring padding tokens.  
+  The actual DPO weight is $\beta_{total} = \beta_{base} \cdot \text{scalar}_{ent}$, optionally with an entropy warm-up period. Configure it via:
+  ```yaml
+  beta_controller:
+    kind: hybrid_entropy
+    target_kl: 0.03
+    alpha_rate: 0.01
+    lambda_entropy: 1.0
+    vocab_size: 32000
+    entropy_warmup_steps: 200
+    beta_init: 0.10
+  ```
+  Set `entropy_warmup_steps` > 0 if you want to disable the spike until the model stabilises.
 
  <a id="phase-3"></a>
 

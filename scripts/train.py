@@ -16,7 +16,12 @@ import typer
 import yaml
 from trl import DPOConfig, DPOTrainer
 
-from adaptive_dpo.beta_controller import AdaptiveBetaController, BetaControllerConfig
+from adaptive_dpo.beta_controller import (
+    AdaptiveBetaController,
+    BetaControllerConfig,
+    HybridAdaptiveKLController,
+    HybridControllerConfig,
+)
 from adaptive_dpo.data import load_preference_dataset, load_ultrafeedback_subset_formatted
 from adaptive_dpo.modeling import load_qwen25_7b
 from adaptive_dpo.trainer import AdaptiveDPOTrainer, LoggingDPOTrainer
@@ -179,12 +184,20 @@ def _train_single_run(cfg: Dict[str, Any], seed: int, run_idx: int, total_runs: 
 
     args = _build_training_args(tr_cfg, seed, run_output_dir)
 
-    controller: Optional[AdaptiveBetaController] = None
+    controller_kind = None
+    controller: Optional[object] = None
     beta_init = float(fixed_beta)
     if controller_cfg:
-        bc_cfg = BetaControllerConfig(**controller_cfg)
-        controller = AdaptiveBetaController(bc_cfg)
-        beta_init = bc_cfg.beta_init
+        controller_kind = controller_cfg.get("kind", "pid")
+        controller_payload = {k: v for k, v in controller_cfg.items() if k != "kind"}
+        if controller_kind == "hybrid_entropy":
+            hc_cfg = HybridControllerConfig(**controller_payload)
+            controller = HybridAdaptiveKLController(hc_cfg)
+            beta_init = hc_cfg.beta_init
+        else:
+            bc_cfg = BetaControllerConfig(**controller_payload)
+            controller = AdaptiveBetaController(bc_cfg)
+            beta_init = bc_cfg.beta_init
 
     kl_log_alpha = float(tr_cfg.get("kl_log_alpha", 0.10))
 
