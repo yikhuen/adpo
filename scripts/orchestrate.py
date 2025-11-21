@@ -124,6 +124,12 @@ def phase2(
         None,
         help="Override the fixed-beta baseline with the supplied beta value (e.g. best from Phase 1).",
     ),
+    audit_batch_index: int = typer.Option(
+        15, help="Zero-based batch index to inspect during the poison audit (default targets Step 16)."
+    ),
+    audit_wandb_project: Optional[str] = typer.Option(
+        None, help="Optional W&B project name for logging poison audit results."
+    ),
 ):
     """Run Phase 2 adaptive vs baselines and evaluate."""
     phase_dir = _phase_output_dir("phase2_adaptive_vs_baselines")
@@ -134,6 +140,9 @@ def phase2(
     ]
     if include_fixed_beta:
         configs.append(("fixed", fixed_config))
+
+    run_outputs: Dict[str, Path] = {}
+    config_map: Dict[str, Dict[str, Any]] = {}
 
     for label, path in configs:
         cfg = _load_yaml(path)
@@ -154,6 +163,8 @@ def phase2(
         config_path = _write_config(cfg, f"phase2_{label}.yaml")
         _run_training(config_path)
         _collect_train_artifacts(str(_resolve_path(run_output)), phase_dir / f"train_{label}")
+        run_outputs[label] = _resolve_path(run_output)
+        config_map[label] = cfg
 
     typer.echo("[orchestrate] Running evaluation for Phase 2")
     eval_output_dir = phase_dir / "evaluation"
@@ -171,6 +182,39 @@ def phase2(
     metrics_dir = _REPO_ROOT / "research" / "results" / "eval" / "metrics"
     if metrics_dir.exists():
         shutil.copytree(metrics_dir, eval_output_dir / "metrics", dirs_exist_ok=True)
+
+    adaptive_output = run_outputs.get("adaptive")
+    adaptive_cfg = config_map.get("adaptive")
+    if adaptive_output and adaptive_cfg:
+        trainer_cfg = adaptive_cfg.get("trainer", {})
+        per_device = int(trainer_cfg.get("per_device_train_batch_size", 1))
+        grad_accum = int(trainer_cfg.get("gradient_accumulation_steps", 1))
+        effective_batch = per_device * grad_accum
+        seed = int(adaptive_cfg.get("seed") or trainer_cfg.get("seed", 42))
+
+        phase_trace_path = adaptive_output / "phase_trace.json"
+        audit_cmd = [
+            sys.executable,
+            "scripts/poison_audit.py",
+            "--config",
+            str(adaptive_config),
+            "--model-dir",
+            str(adaptive_output),
+            "--batch-index",
+            str(audit_batch_index),
+            "--batch-size",
+            str(effective_batch),
+            "--seed",
+            str(seed),
+            "--phase-trace",
+            str(phase_trace_path),
+        ]
+        if audit_wandb_project:
+            audit_cmd.extend(["--wandb-project", audit_wandb_project])
+            audit_cmd.extend(["--wandb-name", f"phase2_poison_audit_seed{seed}"])
+
+        typer.echo("[orchestrate] Running poison audit for Phase 2 adaptive controller")
+        subprocess.run(audit_cmd, check=True, cwd=_REPO_ROOT)
 
 
 @app.command()

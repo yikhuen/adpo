@@ -53,6 +53,95 @@ def _build_training_args(tr_cfg: Dict[str, Any], seed: int, output_dir: Path) ->
     )
 
 
+def _save_phase_trace(run_output_dir: Path, phase_trace: List[Dict[str, Any]]) -> Path:
+    phase_path = run_output_dir / "phase_trace.json"
+    phase_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(phase_path, "w", encoding="utf-8") as f:
+        json.dump(phase_trace, f, indent=2)
+    return phase_path
+
+
+def _log_phase_plot(
+    phase_trace: List[Dict[str, Any]],
+    run_output_dir: Path,
+    run_label: str,
+) -> None:
+    if not phase_trace:
+        return
+
+    points = []
+    for entry in phase_trace:
+        kl_val = entry.get("kl_ema")
+        if kl_val is None:
+            kl_val = entry.get("kl_batch")
+        beta_val = entry.get("beta")
+        step_val = entry.get("global_step", 0)
+        if kl_val is None or beta_val is None:
+            continue
+        points.append((float(kl_val), float(beta_val), int(step_val)))
+
+    if not points:
+        return
+
+    try:
+        import matplotlib.pyplot as plt
+        import numpy as np
+        import seaborn as sns
+    except ImportError:
+        typer.echo("[train] Phase plot skipped (matplotlib/seaborn not installed).")
+        return
+
+    sns.set_style("whitegrid")
+    plt.figure(figsize=(10, 7))
+
+    kl_values = np.array([p[0] for p in points])
+    beta_values = np.array([p[1] for p in points])
+    step_values = np.array([p[2] for p in points])
+
+    plt.plot(kl_values, beta_values, color="orange", alpha=0.4, linewidth=1, zorder=1)
+    sc = plt.scatter(
+        kl_values,
+        beta_values,
+        c=step_values,
+        cmap="viridis",
+        s=60,
+        edgecolors="black",
+        zorder=2,
+        alpha=0.85,
+    )
+
+    max_idx = int(np.argmax(kl_values))
+    plt.annotate(
+        "Poison Batch Impact",
+        xy=(kl_values[max_idx], beta_values[max_idx]),
+        xytext=(kl_values[max_idx], beta_values[max_idx] + 0.05),
+        arrowprops=dict(facecolor="red", shrink=0.05),
+        fontsize=10,
+        fontweight="bold",
+    )
+
+    plt.title("Controller Phase Portrait: Beta Response to KL Divergence", fontsize=14)
+    plt.xlabel("KL Divergence (Error Signal)", fontsize=12)
+    plt.ylabel("Beta Value (Control Output)", fontsize=12)
+    plt.colorbar(sc, label="Global Step")
+    plt.grid(True, linestyle="--", alpha=0.4)
+    plt.tight_layout()
+
+    output_path = run_output_dir / "phase_plot.png"
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    plt.savefig(output_path, dpi=200)
+
+    try:
+        import wandb
+
+        if wandb.run is not None:
+            safe_label = run_label.replace("/", "_")
+            wandb.log({f"phase/{safe_label}_plot": wandb.Image(output_path)}, commit=False)
+    except Exception:
+        pass
+    finally:
+        plt.close()
+
 def _train_single_run(cfg: Dict[str, Any], seed: int, run_idx: int, total_runs: int) -> Dict[str, Any]:
     model_cfg = cfg["model"]
     tr_cfg = cfg["trainer"]
@@ -152,6 +241,12 @@ def _train_single_run(cfg: Dict[str, Any], seed: int, run_idx: int, total_runs: 
         if "train_runtime" in entry or "loss" in entry:
             final_log = entry
             break
+
+    phase_trace = getattr(trainer, "phase_trace", [])
+    if phase_trace:
+        _save_phase_trace(run_output_dir, phase_trace)
+        run_label = getattr(trainer.args, "run_name", None) or run_output_dir.name
+        _log_phase_plot(phase_trace, run_output_dir, run_label)
 
     stats = {
         "seed": seed,

@@ -141,7 +141,28 @@ python scripts/orchestrate.py phase4 --eval-config configs/eval/generalization.y
 Results for each phase (training stats, evaluation metrics) are stored in `research/results/<phase>/`.
 
 - The `--oracle-beta` flag lets you inject the “best” fixed β identified in Phase 1 (or a dataset-specific value) so the Phase 2 oracle baseline trains with that exact setting and logs under a beta-specific subfolder.
-- Phase 2 evaluation now runs at the end of the command and pushes win rates, judge agreement, response-length sanity checks, and model stats directly to W&B (artifacts + panels). Local files remain as cache only.
+- Phase 2 training now saves `phase_trace.json` plus `phase_plot.png` under each run output and logs the KL–β phase portrait to W&B (`phase/<run>_plot`), showing the controller trajectory and poison spike.
+- Phase 2 evaluation runs at the end of the command and pushes win rates, judge agreement, response-length sanity checks, and model stats directly to W&B (artifacts + panels). Local files remain as cache only.
+- The poison audit is executed automatically (default batch index 15) and logs per-sample DPO losses to W&B when `--audit-wandb-project` is provided. Re-run manually to inspect other batches:
+  ```bash
+  # Inspect shuffled batch (forensic checklist)
+  python scripts/inspect_poison_batch.py \
+    --config configs/train/qwen25_7b_adaptive_beta.yaml \
+    --batch-index 15 \
+    --batch-size 8 \
+    --seed 42
+
+  # Compute per-sample losses and log to W&B
+  python scripts/poison_audit.py \
+    --config configs/train/qwen25_7b_adaptive_beta.yaml \
+    --model-dir outputs/adaptive_beta \
+    --batch-index 15 \
+    --batch-size 8 \
+    --seed 42 \
+    --phase-trace outputs/adaptive_beta/phase_trace.json \
+    --wandb-project adaptive-dpo \
+    --wandb-name phase2_poison_audit
+  ```
 
 ## 9) Save and copy results off the pod
 ```bash

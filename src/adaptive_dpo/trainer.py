@@ -1,4 +1,4 @@
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, List
 
 import torch
 from trl import DPOTrainer
@@ -13,6 +13,7 @@ class LoggingDPOTrainer(DPOTrainer):
         self._fixed_beta_value = kwargs.pop("fixed_beta_value", None)
         self._kl_log_alpha = float(kl_log_alpha)
         self._kl_ema = 0.0
+        self.phase_trace: List[Dict[str, Any]] = []
         super().__init__(*args, **kwargs)
 
     def set_fixed_beta_value(self, value: Optional[float]):
@@ -88,6 +89,15 @@ class LoggingDPOTrainer(DPOTrainer):
                 accelerator.log(log_dict, step=self.state.global_step)
             except Exception:
                 pass
+
+        if self.is_world_process_zero():
+            snapshot = {
+                "global_step": int(self.state.global_step),
+                "kl_batch": float(kl_batch),
+                "kl_ema": float(kl_ema),
+                "beta": float(log_dict.get("train/beta")) if "train/beta" in log_dict else None,
+            }
+            self.phase_trace.append(snapshot)
 
     def compute_loss(self, model, inputs, return_outputs=False, **kwargs):
         kl_override = kwargs.pop("_kl_override", None)
