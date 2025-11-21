@@ -6,7 +6,8 @@ Quick demo to train DPO with an adaptive beta controller (target-KL, EMA, clippi
 - GPU: A40 48GB (great value) or L4 24GB. GPU count: 1
 - Template: PyTorch 2.8 (Ubuntu 24.04 + CUDA 12.8.x) – PyTorch is preinstalled
 - Storage: 80–100 GB ephemeral. Do NOT attach a persistent volume unless you want to pay for storage after shutdown
-- Check “SSH Terminal Access”. Jupyter optional
+- Check "SSH Terminal Access". Jupyter optional
+- **Important:** RunPod only persists data in `/workspace` when the pod stops. All project files should be placed in `/workspace` to survive pod restarts.
 
 ## 1) SSH access
 - Add your public key to Runpod → Settings → SSH Public Keys
@@ -24,7 +25,9 @@ tmux new -s run
 ```
 
 ## 3) Get code and install deps
+**Work in `/workspace` to ensure data persists across pod restarts:**
 ```bash
+cd /workspace
 git clone https://github.com/yikhuen/adpo.git && cd adpo
 python3 -m venv .venv && source .venv/bin/activate
 pip install --upgrade pip
@@ -32,7 +35,7 @@ pip install --upgrade pip
 pip install -r requirements.txt --no-cache-dir
 
 # Set PYTHONPATH so scripts can import adaptive_dpo module
-export PYTHONPATH=$PWD/src:$PYTHONPATH
+export PYTHONPATH=/workspace/adpo/src:$PYTHONPATH
 # (Add this to ~/.bashrc or run it each time you start a new terminal session)
 ```
 
@@ -51,10 +54,9 @@ PYTHONHASHSEED=42
 
 # Then copy (upload) it to the GPU with:
 # Replace <PUBLIC_IP>, <PORT>, and <SSH_KEY> with your actual values
-scp -P <PORT> -i ~/.ssh/<SSH_KEY> .env root@<PUBLIC_IP>:~/adpo/.env
+scp -P <PORT> -i ~/.ssh/<SSH_KEY> .env root@<PUBLIC_IP>:/workspace/adpo/.env
 
-# (Adjust the path if you're using a different working directory or repo folder)
-# Now, once connected to the GPU terminal:
+# Now, once connected to the GPU terminal and in /workspace/adpo:
 # 1. Check for carriage returns or whitespace issues:
 cat -vet .env
 
@@ -177,16 +179,18 @@ Results for each phase (training stats, evaluation metrics) are stored in `resea
 
 ## 9) Save and copy results off the pod
 ```bash
+cd /workspace/adpo
 tar -czf results.tgz outputs outputs_fixed
 # from your PC
-scp -P <PORT> -i ~/.ssh/id_rsa root@<PUBLIC_IP>:~/adpo/results.tgz \
+scp -P <PORT> -i ~/.ssh/id_rsa root@<PUBLIC_IP>:/workspace/adpo/results.tgz \
   "/c/Users/<username>/Downloads/"
 ```
 
 ## Notes
 - Training uses Unsloth QLoRA (LoRA adapters on a 4-bit base). Not full fine-tuning
 - We log β, KL EMA, runtime stats, and throughput to Weights & Biases (`WANDB_*` envs required)
-- If you see import issues, export once: `export PYTHONPATH=$PWD/src:$PYTHONPATH`
+- If you see import issues, export once: `export PYTHONPATH=/workspace/adpo/src:$PYTHONPATH`
+- **All work should be done in `/workspace`** - this is the only directory that persists when RunPod pods stop
 - For a detailed experiment playbook (phase breakdown, compute budget, risks) see `research/runbook.md`
 
  **Phase Plan**
