@@ -190,7 +190,7 @@ class PairwiseJudge:
             genai.configure(api_key=api_key)
             model_name = self.model_name or cfg.get("model")
             if not model_name:
-                model_name = "gemini-1.5-flash"
+                model_name = "gemini-2.0-flash-001"
             # Strip 'models/' prefix if accidentally included
             if model_name.startswith("models/"):
                 model_name = model_name[7:]
