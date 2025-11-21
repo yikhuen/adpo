@@ -1,7 +1,65 @@
 from typing import Any, Dict, Optional, List, Tuple
 
+import math
 import torch
+import torch.nn.functional as F
 from trl import DPOTrainer
+
+
+def _determine_vocab_size(tokenizer: Any, default: int = 32000) -> int:
+    if hasattr(tokenizer, "vocab_size") and tokenizer.vocab_size:
+        return int(tokenizer.vocab_size)
+    try:
+        return len(tokenizer)
+    except Exception:
+        return default
+
+
+def _compute_entropy_norm(
+    policy_logits: Optional[torch.Tensor],
+    tokenizer: Any,
+) -> Optional[float]:
+    if policy_logits is None:
+        return None
+    logits = policy_logits.detach().float()
+    log_probs = torch.log_softmax(logits, dim=-1)
+    probs = torch.exp(log_probs)
+    raw_entropy = -(probs * log_probs).sum(dim=-1).mean()
+    vocab_size = _determine_vocab_size(tokenizer)
+    if vocab_size <= 0:
+        return raw_entropy.item()
+    max_entropy = math.log(vocab_size)
+    if max_entropy <= 0:
+        return raw_entropy.item()
+    return (raw_entropy / max_entropy).item()
+
+
+def _build_comprehensive_metrics(
+    *,
+    policy_logits: Optional[torch.Tensor],
+    tokenizer: Any,
+    kl_batch: float,
+    kl_ema: float,
+    controller_state: Optional[Dict[str, Any]],
+    default_beta: float,
+) -> Dict[str, float]:
+    metrics: Dict[str, float] = {}
+    entropy_norm = _compute_entropy_norm(policy_logits, tokenizer)
+    if entropy_norm is not None:
+        metrics["train/entropy_norm"] = entropy_norm
+
+    ctrl_state = controller_state or {}
+    beta_total = ctrl_state.get("beta_total")
+    if beta_total is None:
+        beta_total = ctrl_state.get("beta")
+    if beta_total is None:
+        beta_total = default_beta
+
+    metrics["train/beta_total"] = float(beta_total)
+    metrics["train/beta/base_pid"] = float(ctrl_state.get("beta_base", beta_total))
+    metrics["train/beta/entropy_scalar"] = float(ctrl_state.get("entropy_scalar", 1.0))
+    return metrics
+
 
 class LoggingDPOTrainer(DPOTrainer):
     """Extension of TRL's DPOTrainer that logs KL statistics to Trainer trackers."""
@@ -71,7 +129,12 @@ class LoggingDPOTrainer(DPOTrainer):
         kl = diff.mean().clamp_min(0.0).item()
         return kl, policy_logits, attention_mask
 
-    def _log_metrics(self, kl_batch: float, controller_state: Optional[Dict[str, Any]] = None):
+    def _log_metrics(
+        self,
+        kl_batch: float,
+        controller_state: Optional[Dict[str, Any]] = None,
+        policy_logits: Optional[torch.Tensor] = None,
+    ):
         if not self.is_world_process_zero():
             return
 
@@ -95,6 +158,16 @@ class LoggingDPOTrainer(DPOTrainer):
         else:
             log_dict["train/beta"] = float(beta_val)
 
+        extra_metrics = _build_comprehensive_metrics(
+            policy_logits=policy_logits,
+            tokenizer=self.tokenizer,
+            kl_batch=kl_batch,
+            kl_ema=log_dict["train/kl_ema"],
+            controller_state=controller_state,
+            default_beta=log_dict["train/beta"],
+        )
+        log_dict.update(extra_metrics)
+
         try:
             self.log(log_dict)
         except Exception:
@@ -117,9 +190,13 @@ class LoggingDPOTrainer(DPOTrainer):
 
     def compute_loss(self, model, inputs, return_outputs=False, **kwargs):
         kl_override = kwargs.pop("_kl_override", None)
-        kl_batch = kl_override if kl_override is not None else self._kl_per_token_on_prompt(inputs)
+        policy_logits = None
+        if kl_override is not None:
+            kl_batch = float(kl_override)
+        else:
+            kl_batch, policy_logits, _ = self._kl_with_policy_logits(inputs)
         loss = super().compute_loss(model, inputs, return_outputs=return_outputs, **kwargs)
-        self._log_metrics(kl_batch)
+        self._log_metrics(kl_batch, policy_logits=policy_logits)
         return loss
 
 
@@ -131,24 +208,20 @@ class AdaptiveDPOTrainer(LoggingDPOTrainer):
     def compute_loss(self, model, inputs, return_outputs=False, **kwargs):
         # Update beta from KL estimate
         requires_entropy = getattr(self.beta_controller, "requires_entropy", False)
-        if requires_entropy:
-            kl_batch, policy_logits, attention_mask = self._kl_with_policy_logits(inputs)
-            if policy_logits is None:
-                beta = self.beta_controller.update(kl_batch)
-            else:
-                beta = self.beta_controller.update(
-                    kl_batch,
-                    batch_logits=policy_logits,
-                    attention_mask=attention_mask,
-                    global_step=getattr(self.state, "global_step", 0),
-                )
+        kl_batch, policy_logits, attention_mask = self._kl_with_policy_logits(inputs)
+        if requires_entropy and policy_logits is not None:
+            beta = self.beta_controller.update(
+                kl_batch,
+                batch_logits=policy_logits,
+                attention_mask=attention_mask,
+                global_step=getattr(self.state, "global_step", 0),
+            )
         else:
-            kl_batch = self._kl_per_token_on_prompt(inputs)
             beta = self.beta_controller.update(kl_batch)
         old_beta = getattr(self, "beta", None)
         self.beta = beta
         loss = DPOTrainer.compute_loss(self, model, inputs, return_outputs=return_outputs, **kwargs)
         self.beta = old_beta
         controller_state = self.beta_controller.state() if self.is_world_process_zero() else None
-        self._log_metrics(kl_batch, controller_state=controller_state)
+        self._log_metrics(kl_batch, controller_state=controller_state, policy_logits=policy_logits)
         return loss

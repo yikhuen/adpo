@@ -142,11 +142,15 @@ class AdaptiveBetaController:
         return self.beta
 
     def state(self):
+        beta_val = float(self.beta)
         return {
-            "beta": self.beta,
-            "kl_ema": self.kl_ema,
-            "kl_batch": self.kl_last,
-            "error_ratio": (self.kl_ema / self.cfg.kl_target) - 1.0
+            "beta": beta_val,
+            "beta_total": beta_val,
+            "beta_base": beta_val,
+            "entropy_scalar": 1.0,
+            "kl_ema": float(self.kl_ema),
+            "kl_batch": float(self.kl_last),
+            "error_ratio": (self.kl_ema / self.cfg.kl_target) - 1.0,
         }
 
 
@@ -235,8 +239,10 @@ class HybridAdaptiveKLController:
         return float(final_beta)
 
     def state(self) -> Dict[str, Any]:
+        beta_total = float(self.beta_base * self.last_entropy_scalar)
         return {
-            "beta": float(self.beta_base * self.last_entropy_scalar),
+            "beta": beta_total,
+            "beta_total": beta_total,
             "beta_base": float(self.beta_base),
             "entropy_scalar": float(self.last_entropy_scalar),
             "normalized_entropy": float(self.last_normalized_entropy),
