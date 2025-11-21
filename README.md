@@ -98,13 +98,20 @@ python scripts/train.py --config configs/train/qwen25_7b_annealed_beta.yaml
 Outputs are saved under `outputs/...` (per seed) with LoRA adapters, tokenizer, and `train_stats.json`.
 
 ## 7) Evaluate with LLM judges
-Run multi-model comparisons with cached generations, metric exports, and judge agreement:
+Run multi-model comparisons with cached generations, metric exports, and judge agreement. Choose the judge mix that fits your keys:
 ```bash
-python scripts/eval.py \
-  --config configs/eval/judge_gpt4o_mini.yaml \
-  --force-judge    # optional; rerun judges even if cached decisions exist
+# GPT-4o-mini only
+python scripts/eval.py openai-judge --force-judge
+
+# Gemini 2.0 Flash only
+python scripts/eval.py gemini-judge --force-judge
+
+# Both judges (default Phase 2 setting)
+python scripts/eval.py all-judges --force-judge
 ```
-Artifacts land in `research/results/eval/`:
+Each shortcut loads a default config (`configs/eval/judge_openai_only.yaml`, `configs/eval/judge_gemini_only.yaml`, or `configs/eval/judge_gpt4o_mini.yaml`), which you can override with `--config path/to/config.yaml`.
+
+Artifacts land in the directory specified by the chosen config (defaults: `research/results/eval/`, `research/results/eval_openai/`, `research/results/eval_gemini/`):
 - `responses/*.jsonl` – per-model generations stripped of prompts
 - `decisions/*.jsonl` – per-judge pairwise choices
 - `metrics/summary.json` & `summary.csv` – win rates + 95% CIs
@@ -113,9 +120,9 @@ Artifacts land in `research/results/eval/`:
 - Generate a bar chart locally (also logged to W&B automatically):
   ```bash
   python scripts/plot_response_length_bar.py \
-    --model-stats research/results/eval/metrics/model_stats.json \
+    --model-stats <output_dir>/metrics/model_stats.json \
     --metric avg_length_chars \
-    --output research/results/eval/response_length_bar.png
+    --output <output_dir>/response_length_bar.png
   ```
 
 Speed tips:
@@ -198,6 +205,12 @@ scp -P <PORT> -i ~/.ssh/id_rsa root@<PUBLIC_IP>:~/adpo/results.tgz \
 - **Experiments:** Train each model with two random seeds; reuse Phase 1 logging; capture β trajectory for adaptive and annealed runs.
 - **Analytics:** Report mean ± 95% CI across seeds; run paired bootstrap on win rates (adaptive vs. oracle, adaptive vs. annealed). Include stability plot overlaying KLema vs. KL* and β trajectory.
 - **Deliverables:** “Money” bar chart with win rates and error bars; dual-axis stability plot; summary table for length/safety.
+- **Evaluation commands:**
+  ```bash
+  python scripts/eval.py openai-judge --force-judge
+  python scripts/eval.py gemini-judge --force-judge
+  python scripts/eval.py all-judges --force-judge
+  ```
 
  <a id="phase-3"></a>
 

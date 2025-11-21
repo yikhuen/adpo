@@ -34,6 +34,10 @@ DEFAULT_PROMPT_TEMPLATE = (
     "Prompt:\n{prompt}\n\nResponse A:\n{a}\n\nResponse B:\n{b}\n\nWhich is better? Reply with only A or B."
 )
 
+DEFAULT_ALL_JUDGES_CONFIG = str(Path("configs/eval/judge_gpt4o_mini.yaml"))
+DEFAULT_OPENAI_ONLY_CONFIG = str(Path("configs/eval/judge_openai_only.yaml"))
+DEFAULT_GEMINI_ONLY_CONFIG = str(Path("configs/eval/judge_gemini_only.yaml"))
+
 
 def wilson_ci(wins: int, total: int, z: float = 1.96) -> Tuple[float, float]:
     if total == 0:
@@ -630,13 +634,12 @@ def log_results_to_wandb(
     run.finish()
 
 
-@app.command()
-def main(
-    config: str = typer.Option(..., help="Path to evaluation YAML config."),
-    limit: Optional[int] = typer.Option(None, help="Override prompt limit from config."),
-    force_generate: bool = typer.Option(False, help="Force regeneration of model responses."),
-    force_judge: bool = typer.Option(False, help="Force re-running judges even if cached decisions exist."),
-):
+def run_evaluation(
+    config: str,
+    limit: Optional[int] = None,
+    force_generate: bool = False,
+    force_judge: bool = False,
+) -> None:
     with open(config, "r", encoding="utf-8") as f:
         cfg = yaml.safe_load(f)
 
@@ -711,7 +714,6 @@ def main(
             per_judge_decisions[judge_name][comparison["name"]] = metric_entry
             metrics_summary.setdefault(comparison["name"], {})[judge_name] = metric_entry
 
-
     # Save summary metrics
     summary_path = metrics_dir / "summary.json"
     with summary_path.open("w", encoding="utf-8") as f:
@@ -775,6 +777,71 @@ def main(
         typer.echo(f"[eval] Wrote judge agreement report to {agreement_path}")
     else:
         typer.echo("[eval] Agreement metrics skipped (need at least two judges).")
+
+
+@app.command()
+def main(
+    config: str = typer.Option(..., help="Path to evaluation YAML config."),
+    limit: Optional[int] = typer.Option(None, help="Override prompt limit from config."),
+    force_generate: bool = typer.Option(False, help="Force regeneration of model responses."),
+    force_judge: bool = typer.Option(False, help="Force re-running judges even if cached decisions exist."),
+):
+    """Run evaluation with an explicit config."""
+    run_evaluation(config, limit, force_generate, force_judge)
+
+
+@app.command("openai-judge")
+def run_openai_judge(
+    config: str = typer.Option(
+        DEFAULT_OPENAI_ONLY_CONFIG,
+        "--config",
+        "-c",
+        help="Path to an OpenAI-only eval config.",
+        show_default=False,
+    ),
+    limit: Optional[int] = typer.Option(None, help="Override prompt limit from config."),
+    force_generate: bool = typer.Option(False, help="Force regeneration of model responses."),
+    force_judge: bool = typer.Option(False, help="Force re-running judges even if cached decisions exist."),
+):
+    """Run evaluation using only the OpenAI judge."""
+    typer.echo(f"[eval] Using OpenAI-only judge config: {config}")
+    run_evaluation(config, limit, force_generate, force_judge)
+
+
+@app.command("gemini-judge")
+def run_gemini_judge(
+    config: str = typer.Option(
+        DEFAULT_GEMINI_ONLY_CONFIG,
+        "--config",
+        "-c",
+        help="Path to a Gemini-only eval config.",
+        show_default=False,
+    ),
+    limit: Optional[int] = typer.Option(None, help="Override prompt limit from config."),
+    force_generate: bool = typer.Option(False, help="Force regeneration of model responses."),
+    force_judge: bool = typer.Option(False, help="Force re-running judges even if cached decisions exist."),
+):
+    """Run evaluation using only the Gemini judge."""
+    typer.echo(f"[eval] Using Gemini-only judge config: {config}")
+    run_evaluation(config, limit, force_generate, force_judge)
+
+
+@app.command("all-judges")
+def run_all_judges(
+    config: str = typer.Option(
+        DEFAULT_ALL_JUDGES_CONFIG,
+        "--config",
+        "-c",
+        help="Path to the combined judge eval config.",
+        show_default=False,
+    ),
+    limit: Optional[int] = typer.Option(None, help="Override prompt limit from config."),
+    force_generate: bool = typer.Option(False, help="Force regeneration of model responses."),
+    force_judge: bool = typer.Option(False, help="Force re-running judges even if cached decisions exist."),
+):
+    """Run evaluation with both OpenAI and Gemini judges."""
+    typer.echo(f"[eval] Using combined judge config: {config}")
+    run_evaluation(config, limit, force_generate, force_judge)
 
 
 if __name__ == "__main__":

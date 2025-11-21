@@ -1,0 +1,54 @@
+prompts:
+  path: data/dev.jsonl
+  limit: 200
+  seed: 42
+
+generation:
+  batch_size: 8
+  max_new_tokens: 256
+  cache: true
+
+models:
+  adaptive:
+    kind: lora
+    checkpoint: outputs/adaptive_beta
+  fixed:
+    kind: lora
+    checkpoint: outputs/fixed_beta
+  annealed:
+    kind: lora
+    checkpoint: outputs/annealed_beta
+  base:
+    kind: base
+
+comparisons:
+  - name: adaptive_vs_base
+    a: adaptive
+    b: base
+  - name: adaptive_vs_fixed
+    a: adaptive
+    b: fixed
+  - name: annealed_vs_base
+    a: annealed
+    b: base
+  - name: annealed_vs_fixed
+    a: annealed
+    b: fixed
+  - name: adaptive_vs_annealed
+    a: adaptive
+    b: annealed
+
+judges:
+  - name: primary
+    provider: openai
+    model: gpt-4o-mini
+    max_tokens: 64
+    temperature: 0.0
+    system_prompt: |
+      You are a strict evaluator. Given a prompt and two responses (A and B),
+      choose which response better follows the instructions, is helpful, correct,
+      concise, and safe. Prefer factual, on-topic, and non-toxic content.
+      Reply with only "A" or "B".
+
+output:
+  dir: research/results/eval_openai
