@@ -5,7 +5,7 @@ prompts:
 
 generation:
   batch_size: 8
-  max_new_tokens: 256
+  max_new_tokens: 1024
   cache: true
 
 models:

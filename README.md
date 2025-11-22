@@ -210,6 +210,7 @@ scp -P <PORT> -i ~/.ssh/id_rsa root@<PUBLIC_IP>:/workspace/adpo/results.tgz \
 - **Objective:** Show the proposed controller matches/exceeds oracle performance in one run while retaining stability.
 - **Baselines:** Oracle fixed β (best from Phase 1); annealed β schedule (e.g., β0=0.20 decaying to 0.05 with cosine anneal).
 - **Controller Setup:** EMA α=0.10, deadband ±10% around KL* = 0.04 nats/token, η=0.01, βmin=0.05, βmax=2.0. Entropy spike enables after 10 warm-up steps with λ=4.0.
+- **Training Schedule:** Use gradient accumulation 4 with `max_steps: 120` so each model receives ≥100 optimiser updates while keeping wall-clock reasonable.
 - **Experiments:** Train each model with two random seeds; reuse Phase 1 logging; capture β trajectory for adaptive and annealed runs.
 - **Analytics:** Report mean ± 95% CI across seeds; run paired bootstrap on win rates (adaptive vs. oracle, adaptive vs. annealed). Include stability plot overlaying KLema vs. KL* and β trajectory.
 - **Deliverables:** “Money” bar chart with win rates and error bars; dual-axis stability plot; summary table for length/safety.
@@ -234,6 +235,9 @@ scp -P <PORT> -i ~/.ssh/id_rsa root@<PUBLIC_IP>:/workspace/adpo/results.tgz \
     beta_init: 0.10
     beta_min: 0.05
     beta_max: 2.0
+trainer:
+  gradient_accumulation_steps: 4
+  max_steps: 120  # ensures ≥100 global updates
   ```
   Set `entropy_warmup_steps` > 0 if you want to disable the spike until the model stabilises.
 

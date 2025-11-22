@@ -31,10 +31,11 @@ beta_controller:
 
 trainer:
   per_device_train_batch_size: 1
-  gradient_accumulation_steps: 12
+  gradient_accumulation_steps: 4
   learning_rate: 5.0e-6
   warmup_ratio: 0.1
   num_train_epochs: 1
+  max_steps: 120
   logging_steps: 1
   optim: adamw_8bit
   weight_decay: 0.0
