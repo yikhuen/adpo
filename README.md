@@ -206,10 +206,10 @@ scp -P <PORT> -i ~/.ssh/id_rsa root@<PUBLIC_IP>:/workspace/adpo/results.tgz \
 
  <a id="phase-2"></a>
 
- ## Phase 2 – Adaptive Controller vs. Baselines
+## Phase 2 – Adaptive Controller vs. Baselines
 - **Objective:** Show the proposed controller matches/exceeds oracle performance in one run while retaining stability.
 - **Baselines:** Oracle fixed β (best from Phase 1); annealed β schedule (e.g., β0=0.20 decaying to 0.05 with cosine anneal).
-- **Controller Setup:** EMA α=0.10, deadband ±20% around KL* = 0.03 nats/token, η=0.02, βmin=0.02, βmax=3.0.
+- **Controller Setup:** EMA α=0.10, deadband ±10% around KL* = 0.03 nats/token, η=0.10, βmin=0.05, βmax=2.0. Entropy spike enables after 10 warm-up steps with λ=4.0.
 - **Experiments:** Train each model with two random seeds; reuse Phase 1 logging; capture β trajectory for adaptive and annealed runs.
 - **Analytics:** Report mean ± 95% CI across seeds; run paired bootstrap on win rates (adaptive vs. oracle, adaptive vs. annealed). Include stability plot overlaying KLema vs. KL* and β trajectory.
 - **Deliverables:** “Money” bar chart with win rates and error bars; dual-axis stability plot; summary table for length/safety.
@@ -220,18 +220,20 @@ scp -P <PORT> -i ~/.ssh/id_rsa root@<PUBLIC_IP>:/workspace/adpo/results.tgz \
   python scripts/eval.py all-judges --force-judge
   ```
   These configs log Phase 2 metrics, reward-hacking diagnostics, and plots to W&B automatically; set `WANDB_API_KEY` before running.
-- **Robust hybrid controller:** Phase 2 now defaults to the robust hybrid PID controller. It keeps the EMA/“hybrid sensor” baseline but injects an entropy spike with a larger sensitivity range ($\lambda=5$) and a short warm-up. Baseline update:
+- **Robust hybrid controller:** Phase 2 now defaults to the robust hybrid PID controller. It keeps the EMA trend sensor but injects an entropy spike with a moderate sensitivity range ($\lambda=4$) after a brief warm-up. Baseline update:
   $\beta_{base}^{t+1} = \beta_{base}^{t} \cdot \exp(\eta \cdot \frac{KL_{sensor}-KL_{target}}{KL_{target}})$ whenever the KL deviates outside a ±deadband. The proportional term scales by
   $1 + \lambda \cdot \frac{\text{Entropy}_{batch}}{\log |V|}$. Configure it via:
   ```yaml
   beta_controller:
     kind: robust_hybrid
-    target_kl: 0.05
-    eta: 1.0
-    lambda_entropy: 5.0
+    target_kl: 0.03
+    eta: 0.1
+    lambda_entropy: 4.0
     vocab_size: 32000
-    entropy_warmup_steps: 200
+    entropy_warmup_steps: 10
     beta_init: 0.10
+    beta_min: 0.05
+    beta_max: 2.0
   ```
   Set `entropy_warmup_steps` > 0 if you want to disable the spike until the model stabilises.
 
