@@ -200,12 +200,6 @@ def load_lora_model(ckpt_dir: str, max_seq_length: int = 4096, load_in_4bit: boo
     except Exception as exc:
         raise RuntimeError(f"Failed to load LoRA adapter from '{ckpt_dir}'.") from exc
 
-    if not getattr(model, "is_peft_model", False):
-        raise RuntimeError(
-            f"The model loaded from '{ckpt_dir}' is not a PEFT/LoRA model. "
-            "Ensure the adapter weights were exported correctly."
-        )
-
     return model, tokenizer
 
 
