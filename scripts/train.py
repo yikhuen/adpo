@@ -207,6 +207,10 @@ def _train_single_run(cfg: Dict[str, Any], seed: int, run_idx: int, total_runs: 
 
     kl_log_alpha = float(tr_cfg.get("kl_log_alpha", 0.10))
 
+    high_kl_threshold = tr_cfg.get("high_kl_threshold")
+    if high_kl_threshold is not None:
+        high_kl_threshold = float(high_kl_threshold)
+
     if controller:
         trainer: DPOTrainer = AdaptiveDPOTrainer(
             beta_controller=controller,
@@ -220,6 +224,7 @@ def _train_single_run(cfg: Dict[str, Any], seed: int, run_idx: int, total_runs: 
             max_prompt_length=int(tr_cfg.get("max_prompt_length", 512)),
             kl_log_alpha=kl_log_alpha,
             fixed_beta_value=beta_init,
+            high_kl_threshold=high_kl_threshold,
         )
     else:
         trainer = LoggingDPOTrainer(

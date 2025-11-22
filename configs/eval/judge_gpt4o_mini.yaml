@@ -28,12 +28,6 @@ comparisons:
   - name: adaptive_vs_fixed
     a: adaptive
     b: fixed
-  - name: annealed_vs_base
-    a: annealed
-    b: base
-  - name: annealed_vs_fixed
-    a: annealed
-    b: fixed
   - name: adaptive_vs_annealed
     a: adaptive
     b: annealed
@@ -80,8 +74,6 @@ wandb:
     comparisons:
       - adaptive_vs_base
       - adaptive_vs_fixed
-      - annealed_vs_base
-      - annealed_vs_fixed
       - adaptive_vs_annealed
 
 reward_hacking:

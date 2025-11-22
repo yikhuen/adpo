@@ -44,4 +44,5 @@ trainer:
   max_length: 512
   max_prompt_length: 256
   train_split: train
+  high_kl_threshold: 0.20
 

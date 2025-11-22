@@ -396,6 +396,21 @@ class PairwiseJudge:
         return self._parse_choice(text)
 
 
+QUAL_SAMPLE_LIMIT = 20
+
+
+def _select_sample_records(decisions: List[Dict[str, Any]], limit: int = QUAL_SAMPLE_LIMIT) -> List[Dict[str, Any]]:
+    if len(decisions) <= limit:
+        return decisions.copy()
+    step = max(1, len(decisions) // limit)
+    sampled: List[Dict[str, Any]] = []
+    for idx in range(0, len(decisions), step):
+        sampled.append(decisions[idx])
+        if len(sampled) >= limit:
+            break
+    return sampled
+
+
 def evaluate_comparison(
     comparison: Dict[str, Any],
     prompts: List[Dict[str, Any]],
@@ -403,10 +418,11 @@ def evaluate_comparison(
     judges: List[PairwiseJudge],
     output_dir: Path,
     force: bool = False,
-) -> Dict[str, Dict[str, Any]]:
+) -> Tuple[Dict[str, Dict[str, Any]], Dict[str, List[Dict[str, Any]]]]:
     metrics: Dict[str, Dict[str, Any]] = {}
     decisions_dir = output_dir / "decisions"
     decisions_dir.mkdir(parents=True, exist_ok=True)
+    qualitative_samples: Dict[str, List[Dict[str, Any]]] = {}
 
     model_a = comparison["a"]
     model_b = comparison["b"]
@@ -441,6 +457,8 @@ def evaluate_comparison(
                 for record in decisions:
                     f.write(json.dumps(record, ensure_ascii=False) + "\n")
 
+        qualitative_samples[judge.name] = _select_sample_records(decisions)
+
         wins = sum(1 for record in decisions if record["choice"] == "A")
         total = len(decisions)
         wr = wins / total if total else 0.0
@@ -456,7 +474,7 @@ def evaluate_comparison(
             "decision_path": str(decision_path),
         }
 
-    return metrics
+    return metrics, qualitative_samples
 
 
 def compute_judge_agreement(decisions: Dict[str, Dict[str, Any]]) -> Optional[Dict[str, Any]]:
@@ -553,6 +571,7 @@ def log_results_to_wandb(
     model_stats_path: Optional[Path],
     reward_hacking_report: Optional[Dict[str, Any]],
     reward_hacking_path: Optional[Path],
+    qualitative_samples_by_model: Optional[Dict[str, List[Dict[str, Any]]]] = None,
 ):
     wandb_cfg = cfg.get("wandb", {})
     if not wandb_cfg.get("enabled"):
@@ -682,6 +701,39 @@ def log_results_to_wandb(
         if reward_hacking_report.get("alerts"):
             run.summary["reward_hacking_alerts"] = reward_hacking_report["alerts"]
         run.config.update({"reward_hacking_thresholds": reward_hacking_report.get("thresholds", {})}, allow_val_change=True)
+
+    if qualitative_samples_by_model:
+        for model_name, rows in qualitative_samples_by_model.items():
+            if not rows:
+                continue
+            table = wandb.Table(
+                columns=[
+                    "comparison",
+                    "judge",
+                    "result",
+                    "prompt_id",
+                    "prompt",
+                    "response",
+                    "opponent_model",
+                    "opponent_response",
+                    "position",
+                    "judge_choice",
+                ]
+            )
+            for row in rows:
+                table.add_data(
+                    row.get("comparison"),
+                    row.get("judge"),
+                    row.get("result"),
+                    row.get("prompt_id"),
+                    row.get("prompt"),
+                    row.get("response"),
+                    row.get("opponent_model"),
+                    row.get("opponent_response"),
+                    row.get("position"),
+                    row.get("choice"),
+                )
+            run.log({f"qualitative/{model_name}": table}, commit=False)
 
     bar_cfg = wandb_cfg.get("bar_chart", {})
     if bar_cfg.get("enabled"):
@@ -834,6 +886,7 @@ def run_evaluation(
 
     # Evaluate comparisons
     metrics_summary: Dict[str, Dict[str, Any]] = {}
+    qualitative_samples: Dict[str, Dict[str, List[Dict[str, Any]]]] = {}
     per_judge_decisions: Dict[str, Dict[str, Any]] = {judge.name: {} for judge in judges}
 
     metrics_dir = output_dir / "metrics"
@@ -841,7 +894,7 @@ def run_evaluation(
 
     for comparison in cfg.get("comparisons", []):
         typer.echo(f"[eval] Evaluating comparison {comparison['name']}")
-        comparison_metrics = evaluate_comparison(
+        comparison_metrics, comparison_sample_records = evaluate_comparison(
             comparison,
             prompts,
             responses,
@@ -849,10 +902,62 @@ def run_evaluation(
             output_dir,
             force=force_judge,
         )
+        qualitative_samples[comparison["name"]] = comparison_sample_records
         for judge_name, judge_metrics in comparison_metrics.items():
             metric_entry = judge_metrics[comparison["name"]]
             per_judge_decisions[judge_name][comparison["name"]] = metric_entry
             metrics_summary.setdefault(comparison["name"], {})[judge_name] = metric_entry
+
+    def _clip_text(value: str, limit: int = 1000) -> str:
+        if not isinstance(value, str):
+            value = str(value)
+        return value if len(value) <= limit else value[:limit]
+
+    qualitative_by_model: Dict[str, List[Dict[str, Any]]] = {model: [] for model in responses.keys()}
+
+    def _add_model_sample(
+        model_name: str,
+        position: str,
+        record: Dict[str, Any],
+        opponent_model: str,
+        comparison_name: str,
+        judge_name: str,
+    ) -> None:
+        rows = qualitative_by_model.setdefault(model_name, [])
+        if len(rows) >= QUAL_SAMPLE_LIMIT:
+            return
+        response_key = "response_a" if position == "A" else "response_b"
+        opponent_key = "response_b" if position == "A" else "response_a"
+        prompt_text = _clip_text(record.get("prompt", ""))
+        response_text = _clip_text(record.get(response_key, ""))
+        opponent_response_text = _clip_text(record.get(opponent_key, ""))
+        choice = record.get("choice")
+        result = "win" if choice == position else "loss"
+        rows.append(
+            {
+                "comparison": comparison_name,
+                "judge": judge_name,
+                "prompt_id": record.get("id"),
+                "prompt": prompt_text,
+                "response": response_text,
+                "opponent_model": opponent_model,
+                "opponent_response": opponent_response_text,
+                "position": position,
+                "choice": choice,
+                "result": result,
+            }
+        )
+
+    for comparison_name, judge_records in qualitative_samples.items():
+        for judge_name, sample_records in judge_records.items():
+            metric_entry = metrics_summary.get(comparison_name, {}).get(judge_name)
+            if not metric_entry:
+                continue
+            model_a = metric_entry["model_a"]
+            model_b = metric_entry["model_b"]
+            for record in sample_records:
+                _add_model_sample(model_a, "A", record, model_b, comparison_name, judge_name)
+                _add_model_sample(model_b, "B", record, model_a, comparison_name, judge_name)
 
     # Save summary metrics
     summary_path = metrics_dir / "summary.json"
@@ -921,6 +1026,7 @@ def run_evaluation(
         model_stats_path=model_stats_path,
         reward_hacking_report=reward_hacking_report,
         reward_hacking_path=reward_hacking_path,
+        qualitative_samples_by_model=qualitative_by_model,
     )
 
     # Judge agreement

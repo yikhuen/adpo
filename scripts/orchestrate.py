@@ -65,6 +65,34 @@ def _load_yaml(path: Path) -> Dict:
         return yaml.safe_load(f)
 
 
+def _prepare_eval_prompts(eval_cfg: Dict, dataset_config: Path, prompt_count: int) -> Path:
+    prompts_cfg = eval_cfg.get("prompts") or {}
+    prompt_path = prompts_cfg.get("path")
+    if not prompt_path:
+        raise typer.BadParameter("Evaluation config must define 'prompts.path'.")
+    split = prompts_cfg.get("split", "eval")
+    prompt_abs_path = _resolve_path(Path(prompt_path))
+    prompt_abs_path.parent.mkdir(parents=True, exist_ok=True)
+
+    typer.echo(
+        f"[orchestrate] Preparing evaluation prompts ({prompt_count}) at {prompt_abs_path} (split='{split}')"
+    )
+    cmd = [
+        sys.executable,
+        "scripts/prepare_dev_set.py",
+        "--config",
+        str(dataset_config),
+        "--size",
+        str(prompt_count),
+        "--split",
+        split,
+        "--out",
+        str(prompt_abs_path),
+    ]
+    subprocess.run(cmd, check=True, cwd=_REPO_ROOT)
+    return prompt_abs_path
+
+
 def _phase_output_dir(phase: str) -> Path:
     dir_path = RESULTS_ROOT / phase
     dir_path.mkdir(parents=True, exist_ok=True)
@@ -130,6 +158,9 @@ def phase2(
     audit_wandb_project: Optional[str] = typer.Option(
         None, help="Optional W&B project name for logging poison audit results."
     ),
+    eval_prompt_size: int = typer.Option(
+        200, help="Number of evaluation prompts to generate for Phase 2 judges."
+    ),
 ):
     """Run Phase 2 adaptive vs baselines and evaluate."""
     phase_dir = _phase_output_dir("phase2_adaptive_vs_baselines")
@@ -169,17 +200,22 @@ def phase2(
     typer.echo("[orchestrate] Running evaluation for Phase 2")
     eval_output_dir = phase_dir / "evaluation"
     eval_output_dir.mkdir(parents=True, exist_ok=True)
+
+    eval_cfg = _load_yaml(eval_config)
+    _prepare_eval_prompts(eval_cfg, adaptive_config, eval_prompt_size)
     eval_cmd = [
         sys.executable,
         "scripts/eval.py",
         "--config",
         str(eval_config),
     ]
+    eval_cmd.extend(["--limit", str(eval_prompt_size)])
     if force_eval:
         eval_cmd.append("--force-judge")
     subprocess.run(eval_cmd, check=True, cwd=_REPO_ROOT)
     # Copy metrics into phase results
-    metrics_dir = _REPO_ROOT / "research" / "results" / "eval" / "metrics"
+    eval_results_root = eval_cfg.get("output", {}).get("dir", "research/results/eval")
+    metrics_dir = _resolve_path(Path(eval_results_root)) / "metrics"
     if metrics_dir.exists():
         shutil.copytree(metrics_dir, eval_output_dir / "metrics", dirs_exist_ok=True)
 

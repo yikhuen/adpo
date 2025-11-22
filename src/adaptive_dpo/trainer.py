@@ -111,23 +111,38 @@ class LoggingDPOTrainer(DPOTrainer):
         return diff.mean().clamp_min(0.0).item()
 
     @torch.no_grad()
-    def _kl_with_policy_logits(self, batch) -> Tuple[float, Optional[torch.Tensor], Optional[torch.Tensor]]:
+    def _kl_with_policy_logits(
+        self, batch
+    ) -> Tuple[
+        float,
+        Optional[torch.Tensor],
+        Optional[torch.Tensor],
+        Optional[torch.Tensor],
+        Optional[torch.Tensor],
+    ]:
         input_ids, attention_mask = self._pick_ids_and_mask(batch)
         if input_ids is None:
-            return 0.0, None, None
+            return 0.0, None, None, None, None
         policy_outputs = self.model(input_ids=input_ids, attention_mask=attention_mask)
         policy_logits = policy_outputs.logits.float().detach()
         if self.ref_model is None:
-            return 0.0, policy_logits, attention_mask
+            return 0.0, policy_logits, attention_mask, None, input_ids
         ref_outputs = self.ref_model(input_ids=input_ids, attention_mask=attention_mask)
         pol_lp = torch.log_softmax(policy_logits, dim=-1)
         ref_lp = torch.log_softmax(ref_outputs.logits.float(), dim=-1)
         tgt = input_ids.unsqueeze(-1)
         pol_tok = pol_lp.gather(-1, tgt).squeeze(-1)
         ref_tok = ref_lp.gather(-1, tgt).squeeze(-1)
-        diff = (pol_tok - ref_tok)
-        kl = diff.mean().clamp_min(0.0).item()
-        return kl, policy_logits, attention_mask
+        diff = (pol_tok - ref_tok).clamp_min(0.0)
+        if attention_mask is not None:
+            mask = attention_mask.float()
+            denom = mask.sum(dim=-1).clamp_min(1.0)
+            per_sample_kl = (diff * mask).sum(dim=-1) / denom
+        else:
+            per_sample_kl = diff.mean(dim=-1)
+        per_sample_kl = per_sample_kl.clamp_min(0.0)
+        kl = per_sample_kl.mean().item()
+        return kl, policy_logits, attention_mask, per_sample_kl.detach(), input_ids
 
     def _log_metrics(
         self,
@@ -194,7 +209,7 @@ class LoggingDPOTrainer(DPOTrainer):
         if kl_override is not None:
             kl_batch = float(kl_override)
         else:
-            kl_batch, policy_logits, _ = self._kl_with_policy_logits(inputs)
+            kl_batch, policy_logits, _, _, _ = self._kl_with_policy_logits(inputs)
         loss = super().compute_loss(model, inputs, return_outputs=return_outputs, **kwargs)
         self._log_metrics(kl_batch, policy_logits=policy_logits)
         return loss
@@ -202,13 +217,14 @@ class LoggingDPOTrainer(DPOTrainer):
 
 class AdaptiveDPOTrainer(LoggingDPOTrainer):
     def __init__(self, beta_controller: Any, *args, **kwargs):
+        self._high_kl_threshold = kwargs.pop("high_kl_threshold", None)
         super().__init__(*args, **kwargs)
         self.beta_controller = beta_controller
 
     def compute_loss(self, model, inputs, return_outputs=False, **kwargs):
         # Update beta from KL estimate
         requires_entropy = getattr(self.beta_controller, "requires_entropy", False)
-        kl_batch, policy_logits, attention_mask = self._kl_with_policy_logits(inputs)
+        kl_batch, policy_logits, attention_mask, per_sample_kl, input_ids = self._kl_with_policy_logits(inputs)
         if requires_entropy and policy_logits is not None:
             beta = self.beta_controller.update(
                 kl_batch,
@@ -224,4 +240,40 @@ class AdaptiveDPOTrainer(LoggingDPOTrainer):
         self.beta = old_beta
         controller_state = self.beta_controller.state() if self.is_world_process_zero() else None
         self._log_metrics(kl_batch, controller_state=controller_state, policy_logits=policy_logits)
+        self._log_high_kl_samples(input_ids, per_sample_kl)
         return loss
+
+    def _log_high_kl_samples(
+        self,
+        input_ids: Optional[torch.Tensor],
+        per_sample_kl: Optional[torch.Tensor],
+    ) -> None:
+        threshold = self._high_kl_threshold
+        if threshold is None or input_ids is None or per_sample_kl is None:
+            return
+        if not self.is_world_process_zero():
+            return
+
+        kl_cpu = per_sample_kl.detach().float().cpu()
+        high_idx = (kl_cpu >= threshold).nonzero(as_tuple=False).flatten()
+        if high_idx.numel() == 0:
+            return
+
+        ids_cpu = input_ids.detach().cpu()
+        step = int(getattr(self.state, "global_step", 0))
+        rows = []
+        for idx in high_idx.tolist():
+            sample_ids = ids_cpu[idx]
+            text = self.tokenizer.decode(sample_ids.tolist(), skip_special_tokens=True)
+            rows.append([step, float(kl_cpu[idx].item()), text[:1000]])
+
+        try:
+            import wandb
+
+            table = wandb.Table(columns=["Step", "KL_Value", "Text_Snippet"], data=rows)
+            wandb.log({"investigation/high_kl_samples": table}, step=step)
+        except Exception:
+            pass
+
+        for _, kl_value, snippet in rows:
+            print(f"[adaptive-dpo] KL spike at step {step}: KL={kl_value:.4f} :: {snippet[:120]}")
