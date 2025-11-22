@@ -166,6 +166,7 @@ class HybridControllerConfig:
     lambda_entropy: float = 1.0
     vocab_size: int = 32000
     entropy_warmup_steps: int = 0
+    deadband_ratio: float = 0.10
 
 
 class HybridAdaptiveKLController:
@@ -225,10 +226,11 @@ class HybridAdaptiveKLController:
             normalized_entropy = self._normalized_entropy(batch_logits, attention_mask)
             entropy_scalar = 1.0 + self.lambda_entropy * normalized_entropy
 
-        if kl_batch > self.target_kl:
-            self.beta_base *= (1.0 + self.alpha_rate)
-        elif kl_batch < self.target_kl:
-            self.beta_base /= (1.0 + self.alpha_rate)
+        target = max(self.target_kl, 1e-8)
+        error_ratio = (kl_batch / target) - 1.0
+        if abs(error_ratio) > self.cfg.deadband_ratio:
+            factor = math.exp(self.alpha_rate * error_ratio)
+            self.beta_base *= factor
 
         self.beta_base = max(self.beta_min, min(self.beta_max, self.beta_base))
         final_beta = self.beta_base * entropy_scalar
@@ -252,14 +254,14 @@ class HybridAdaptiveKLController:
 
 @dataclass
 class RobustHybridConfig:
-    target_kl: float = 0.05
+    target_kl: float = 0.03
     beta_init: float = 0.10
-    beta_min: float = 0.01
+    beta_min: float = 0.05
     beta_max: float = 2.0
-    eta: float = 1.0
+    eta: float = 0.1
     ema_alpha: float = 0.1
     deadband: float = 0.10
-    lambda_entropy: float = 5.0
+    lambda_entropy: float = 4.0
     vocab_size: int = 32000
     entropy_warmup_steps: int = 10
 
@@ -307,7 +309,7 @@ class RobustHybridController:
         self.step_count += 1
 
         self.kl_ema = (1.0 - self.cfg.ema_alpha) * self.kl_ema + self.cfg.ema_alpha * kl_batch
-        sensor_kl = max(self.kl_ema, kl_batch)
+        sensor_kl = self.kl_ema
 
         lower = self.cfg.target_kl * (1.0 - self.cfg.deadband)
         upper = self.cfg.target_kl * (1.0 + self.cfg.deadband)
