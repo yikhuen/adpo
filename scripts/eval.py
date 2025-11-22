@@ -23,6 +23,7 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from adaptive_dpo.modeling import load_qwen25_7b_base
 from adaptive_dpo.utils.generate import generate_batch
+from unsloth import FastLanguageModel
 
 try:
     from plot_ablation_bar import build_ablation_bar_figure
@@ -180,11 +181,31 @@ def strip_prompt(prompt_text: str, full_text: str) -> str:
 
 
 def load_lora_model(ckpt_dir: str, max_seq_length: int = 4096, load_in_4bit: bool = True):
-    model, tokenizer = load_qwen25_7b_base(max_seq_length=max_seq_length, load_in_4bit=load_in_4bit)
+    ckpt_path = Path(ckpt_dir)
+    adapter_path = ckpt_path / "adapter_model.safetensors"
+    if not adapter_path.exists():
+        raise FileNotFoundError(
+            f"Expected LoRA adapter weights at '{adapter_path}'. "
+            "Verify the checkpoint directory is correct and training completed."
+        )
+
     try:
-        model.load_adapter(ckpt_dir)
-    except Exception:
-        pass
+        model, tokenizer = FastLanguageModel.from_pretrained(
+            model_name="Qwen/Qwen2.5-7B-Instruct",
+            max_seq_length=max_seq_length,
+            dtype=None,
+            load_in_4bit=load_in_4bit,
+            peft_model_id=str(ckpt_path),
+        )
+    except Exception as exc:
+        raise RuntimeError(f"Failed to load LoRA adapter from '{ckpt_dir}'.") from exc
+
+    if not getattr(model, "is_peft_model", False):
+        raise RuntimeError(
+            f"The model loaded from '{ckpt_dir}' is not a PEFT/LoRA model. "
+            "Ensure the adapter weights were exported correctly."
+        )
+
     return model, tokenizer
 
 
@@ -231,6 +252,10 @@ def ensure_responses(
     cache_path = responses_dir / f"{name}.jsonl"
 
     if cache_path.exists() and not force:
+        typer.echo(
+            f"[eval] Using cached responses for model '{name}'. "
+            "Run with --force-generate or delete the cache to regenerate."
+        )
         with cache_path.open("r", encoding="utf-8") as f:
             return [json.loads(line) for line in f]
 
