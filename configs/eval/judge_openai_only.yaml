@@ -11,13 +11,13 @@ generation:
 models:
   adaptive:
     kind: lora
-    checkpoint: outputs/adaptive_beta
+    checkpoint: outputs/adaptive_beta/checkpoint-77
   fixed:
     kind: lora
-    checkpoint: outputs/fixed_beta
+    checkpoint: outputs/fixed_beta/beta_0p200/checkpoint-77
   annealed:
     kind: lora
-    checkpoint: outputs/annealed_beta
+    checkpoint: outputs/annealed_beta/checkpoint-77
   base:
     kind: base
 
