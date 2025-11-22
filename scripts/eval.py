@@ -191,12 +191,12 @@ def load_lora_model(ckpt_dir: str, max_seq_length: int = 4096, load_in_4bit: boo
 
     try:
         model, tokenizer = FastLanguageModel.from_pretrained(
-            model_name="Qwen/Qwen2.5-7B-Instruct",
+            model_name=str(ckpt_path),
             max_seq_length=max_seq_length,
             dtype=None,
             load_in_4bit=load_in_4bit,
-            peft_model_id=str(ckpt_path),
         )
+        FastLanguageModel.for_inference(model)
     except Exception as exc:
         raise RuntimeError(f"Failed to load LoRA adapter from '{ckpt_dir}'.") from exc
 
