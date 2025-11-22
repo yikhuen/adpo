@@ -254,11 +254,11 @@ class HybridAdaptiveKLController:
 
 @dataclass
 class RobustHybridConfig:
-    target_kl: float = 0.03
+    target_kl: float = 0.04
     beta_init: float = 0.10
     beta_min: float = 0.05
     beta_max: float = 2.0
-    eta: float = 0.1
+    eta: float = 0.01
     ema_alpha: float = 0.1
     deadband: float = 0.10
     lambda_entropy: float = 4.0

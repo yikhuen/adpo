@@ -209,7 +209,7 @@ scp -P <PORT> -i ~/.ssh/id_rsa root@<PUBLIC_IP>:/workspace/adpo/results.tgz \
 ## Phase 2 – Adaptive Controller vs. Baselines
 - **Objective:** Show the proposed controller matches/exceeds oracle performance in one run while retaining stability.
 - **Baselines:** Oracle fixed β (best from Phase 1); annealed β schedule (e.g., β0=0.20 decaying to 0.05 with cosine anneal).
-- **Controller Setup:** EMA α=0.10, deadband ±10% around KL* = 0.03 nats/token, η=0.10, βmin=0.05, βmax=2.0. Entropy spike enables after 10 warm-up steps with λ=4.0.
+- **Controller Setup:** EMA α=0.10, deadband ±10% around KL* = 0.04 nats/token, η=0.01, βmin=0.05, βmax=2.0. Entropy spike enables after 10 warm-up steps with λ=4.0.
 - **Experiments:** Train each model with two random seeds; reuse Phase 1 logging; capture β trajectory for adaptive and annealed runs.
 - **Analytics:** Report mean ± 95% CI across seeds; run paired bootstrap on win rates (adaptive vs. oracle, adaptive vs. annealed). Include stability plot overlaying KLema vs. KL* and β trajectory.
 - **Deliverables:** “Money” bar chart with win rates and error bars; dual-axis stability plot; summary table for length/safety.
@@ -226,8 +226,8 @@ scp -P <PORT> -i ~/.ssh/id_rsa root@<PUBLIC_IP>:/workspace/adpo/results.tgz \
   ```yaml
   beta_controller:
     kind: robust_hybrid
-    target_kl: 0.03
-    eta: 0.1
+    target_kl: 0.04
+    eta: 0.01
     lambda_entropy: 4.0
     vocab_size: 32000
     entropy_warmup_steps: 10

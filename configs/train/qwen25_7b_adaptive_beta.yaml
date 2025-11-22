@@ -18,11 +18,11 @@ dataset:
 
 beta_controller:
   kind: robust_hybrid
-  target_kl: 0.03
+  target_kl: 0.04
   beta_init: 0.10
   beta_min: 0.05
   beta_max: 2.0
-  eta: 0.1
+  eta: 0.01
   ema_alpha: 0.10
   deadband: 0.10
   lambda_entropy: 4.0
