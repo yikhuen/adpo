@@ -13,6 +13,13 @@
   - `adamw_8bit`, `max_length: 1024`, `max_prompt_length: 512`, logging every step.
 - **Variants:**
   - **Adaptive (robust_hybrid controller):** target KL 0.04, β∈[0.05, 2.0], η=0.01, EMA α=0.10, ±10% deadband, entropy spike λ=4 after 10 warm-up steps (`configs/train/qwen25_7b_adaptive_beta.yaml`).
+
+    **Controller Mechanics:**
+    The `RobustHybridController` uses a dual-loop logic ($\beta_{total} = \beta_{base} \times \text{EntropyScalar}$):
+    1. **Slow Loop (Stability):** Adjusts `beta_base` to keep KL divergence near target (0.04) using integral control with a deadband:
+       $$\beta_{base}^{t+1} \leftarrow \beta_{base}^t \cdot \exp(\eta \cdot \text{Error})$$
+    2. **Fast Loop (Safety):** Applies an instant multiplier if the model output becomes high-entropy, preventing collapse into incoherent/unsafe states:
+       $$\text{EntropyScalar} = 1 + (\lambda \cdot \text{NormalizedEntropy})$$
   - **Fixed β baseline:** β=0.10 constant (`configs/train/qwen25_7b_fixed_beta.yaml`).
   - **Annealed β schedule:** cosine from 0.20 → 0.05 (`configs/train/qwen25_7b_annealed_beta.yaml`).
 - **Evaluation:** `python scripts/eval.py openai-judge --force-judge` (OpenAI `gpt-4o-mini` judge) on a 200-prompt dev set. Results logged to Weights & Biases and exported as `wandb_export_*.csv`.
