@@ -54,42 +54,42 @@ To understand why the Adaptive model achieved a 78% win rate with identical aggr
 
 **Step 3: Parameter Adjustment (The Act)**
 
-- **Action:** The controller calculates \(\beta_{total} = \beta_{base} \times \text{EntropyScalar}\).
+- **Action:** The controller calculates $\beta_{total} = \beta_{base} \times \text{EntropyScalar}$.
 - **Telemetry evidence (`train/beta`):** The adaptive run (blue line) shows a distinct upward bump. This is the record of the controller tightening the "rules of engagement" for this specific batch.
 
 **Step 4: Margin Calculation (The Inflation)**
 
-- **Action:** The loss function calculates the margin: \(\text{Margin} = \beta \times (\log P_{chosen} - \log P_{rejected})\).
-- **Event:** Because \(\beta\) is momentarily spiked (e.g., \(5\times\)), the margin value inflates mathematically.
+- **Action:** The loss function calculates the margin: $\text{Margin} = \beta \times (\log P_{chosen} - \log P_{rejected})$.
+- **Event:** Because $\beta$ is momentarily spiked (e.g., $5\times$), the margin value inflates mathematically.
 - **Telemetry evidence (`train/rewards/margins`):** We observe a **massive spike** in the adaptive run. While partly mechanical inflation, this sets up the large gradient needed in the next step.
 
 **Step 5: Gradient Calculation (The Discriminator)**
 
 - **Action:** The optimizer computes gradients to minimize the loss.
-- **Mechanism:** \(\beta\) acts as a **discriminator threshold**:
-  - *Low \(\beta\) (baseline):* Accepts minor probability gaps (51% vs 49%) as adequate.
-  - *High \(\beta\) (adaptive):* **Rejects** minor gaps; loss stays high until the probability gap is decisive (e.g., 90% vs 10%).
+- **Mechanism:** $\beta$ acts as a **discriminator threshold**:
+  - *Low $\beta$ (baseline):* Accepts minor probability gaps (51% vs 49%) as adequate.
+  - *High $\beta$ (adaptive):* **Rejects** minor gaps; loss stays high until the probability gap is decisive (e.g., 90% vs 10%).
 - **Effect:** The controller creates a "lazy-solution filter," effectively telling the optimizer: *"I will not accept a minor probability shift; you must separate the chosen from the rejected response with high confidence."*
 
 **Step 6: Weight Update (The Learning)**
 
 - **Action:** The model updates its weights to satisfy the discriminator.
-- **Event:** To satisfy the high-\(\beta\) constraint, the model must go beyond surface features (tone, length) and discover a **deep, semantic feature** (e.g., detecting a false premise) that reliably separates responses.
+- **Event:** To satisfy the high-$\beta$ constraint, the model must go beyond surface features (tone, length) and discover a **deep, semantic feature** (e.g., detecting a false premise) that reliably separates responses.
 - **Result:** The model learns a robust feature instead of fitting noise.
 
 **Step 7: Consequence (The "Swerve")**
 
-- **Action:** The system measures \(D_{KL}\), the distance from the reference model.
+- **Action:** The system measures $D_{KL}$, the distance from the reference model.
 - **Event:** Because the discriminator forced a large, meaningful update, the model "jumps" to a new location in parameter space.
 - **Telemetry evidence (`train/kl_batch`):** A **sharp spike** appears in the adaptive run (the "skid marks"), indicating an aggressive but targeted correction.
 - **Telemetry evidence (`train/kl_ema`):** The EMA line remains relatively flat, showing that the maneuver was elastic and the model rapidly re-stabilized instead of entering a divergence spiral.
 
 ### 2. Theoretical Insight: Signal Amplification
 
-The adaptive \(\beta\) mechanism behaves as a **dynamic signal amplifier** for the preference labels.
+The adaptive $\beta$ mechanism behaves as a **dynamic signal amplifier** for the preference labels.
 
-- **Problem:** In confusing batches like Step 254, the **signal** (that the preferred response should win) is weak, while the model's internal **noise** (uncertainty) is strong. A fixed \(\beta\) treats the signal-to-noise ratio as constant and often ends up learning from the noise.
-- **Solution:** Because \(\beta\) scales the gradient derived from the preference labels, spiking \(\beta\) when entropy is high **turns up the volume on the signal**. The controller makes the ground-truth preference louder than the model’s confusion, forcing alignment with the label even in ambiguous regions.
+- **Problem:** In confusing batches like Step 254, the **signal** (that the preferred response should win) is weak, while the model's internal **noise** (uncertainty) is strong. A fixed $\beta$ treats the signal-to-noise ratio as constant and often ends up learning from the noise.
+- **Solution:** Because $\beta$ scales the gradient derived from the preference labels, spiking $\beta$ when entropy is high **turns up the volume on the signal**. The controller makes the ground-truth preference louder than the model’s confusion, forcing alignment with the label even in ambiguous regions.
 
 ### 3. Summary of Dynamics
 
