@@ -24,6 +24,7 @@ outputs/
 checkpoints/
 *.pt
 *.bin
+*.csv
 
 # OS / editors
 .DS_Store
