@@ -153,9 +153,14 @@ class LoggingDPOTrainer(DPOTrainer):
         if not self.is_world_process_zero():
             return
 
+        beta_val = None
         if controller_state is not None:
-            beta_val = controller_state.get("beta")
+            beta_val = controller_state.get("beta_total")
             kl_ema = controller_state.get("kl_ema", kl_batch)
+            if beta_val is None:
+                raise ValueError(
+                    "Controller state did not provide 'beta_total'; cannot log adaptive beta."
+                )
         else:
             beta_val = self._fixed_beta_value if self._fixed_beta_value is not None else getattr(self, "beta", None)
             alpha = max(0.0, min(1.0, self._kl_log_alpha))
@@ -166,12 +171,12 @@ class LoggingDPOTrainer(DPOTrainer):
             "train/kl_batch": kl_batch,
             "train/kl_ema": kl_ema,
         }
-        if beta_val is None:
+        if beta_val is not None:
+            log_dict["train/beta"] = float(beta_val)
+        else:
             beta_attr = getattr(self, "beta", None)
             if beta_attr is not None:
                 log_dict["train/beta"] = float(beta_attr)
-        else:
-            log_dict["train/beta"] = float(beta_val)
 
         extra_metrics = _build_comprehensive_metrics(
             policy_logits=policy_logits,
@@ -179,7 +184,7 @@ class LoggingDPOTrainer(DPOTrainer):
             kl_batch=kl_batch,
             kl_ema=log_dict["train/kl_ema"],
             controller_state=controller_state,
-            default_beta=log_dict["train/beta"],
+            default_beta=log_dict.get("train/beta", 0.0),
         )
         log_dict.update(extra_metrics)
 
