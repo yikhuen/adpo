@@ -34,6 +34,10 @@ def main(
         "Qwen/Qwen2.5-7B-Instruct",
         help="Tokenizer name/path used for chat template.",
     ),
+    respect_config_sampling: bool = typer.Option(
+        False,
+        help="If False (default), ignore sample_frac/sample_size from training config so the full split is available.",
+    ),
 ):
     """
     Export a JSONL file of prompts for evaluation/dev set generation.
@@ -71,6 +75,12 @@ def main(
     tokenizer = AutoTokenizer.from_pretrained(
         tokenizer_name, use_fast=False, trust_remote_code=True
     )
+
+    if not respect_config_sampling:
+        # Remove sampling directives inherited from the training config so we can export
+        # the full evaluation split (or control size purely via --size).
+        dataset_cfg.pop("sample_frac", None)
+        dataset_cfg.pop("sample_size", None)
 
     ds_dict = load_preference_dataset(tokenizer, dataset_cfg)
 

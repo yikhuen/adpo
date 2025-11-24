@@ -17,12 +17,12 @@ per baseline, and prints a table with Wilson score intervals.
 from __future__ import annotations
 
 import argparse
-import math
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional
 
 import pandas as pd
+from statistics import NormalDist
 
 
 def parse_args() -> argparse.Namespace:
@@ -100,14 +100,21 @@ def extract_records(df: pd.DataFrame) -> Iterable[EvalRecord]:
         yield EvalRecord(baseline=baseline or "unknown", adaptive_win=adaptive_win)
 
 
+def _z_value(confidence: float) -> float:
+    if not 0.0 < confidence < 1.0:
+        raise ValueError("confidence must be between 0 and 1 (exclusive)")
+    # central coverage confidence; convert to upper-tail probability
+    return NormalDist().inv_cdf(0.5 + confidence / 2.0)
+
+
 def wilson_interval(wins: int, total: int, confidence: float) -> tuple[float, float]:
     if total == 0:
         return 0.0, 0.0
-    z = abs(math.erf(confidence / math.sqrt(2))) * math.sqrt(2)
+    z = _z_value(confidence)
     phat = wins / total
     denom = 1 + z**2 / total
     center = phat + z**2 / (2 * total)
-    adj_sd = z * math.sqrt((phat * (1 - phat) + z**2 / (4 * total)) / total)
+    adj_sd = z * ((phat * (1 - phat) + z**2 / (4 * total)) / total) ** 0.5
     lower = (center - adj_sd) / denom
     upper = (center + adj_sd) / denom
     return max(0.0, lower), min(1.0, upper)
