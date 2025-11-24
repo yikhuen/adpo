@@ -49,6 +49,7 @@ def _build_training_args(tr_cfg: Dict[str, Any], seed: int, output_dir: Path) ->
         gradient_accumulation_steps=int(tr_cfg.get("gradient_accumulation_steps", 12)),
         warmup_ratio=float(tr_cfg.get("warmup_ratio", 0.1)),
         num_train_epochs=float(tr_cfg.get("num_train_epochs", 1)),
+        max_steps=int(tr_cfg.get("max_steps", -1)),
         learning_rate=float(tr_cfg.get("learning_rate", 5e-6)),
         logging_steps=int(tr_cfg.get("logging_steps", 1)),
         optim=str(tr_cfg.get("optim", "adamw_8bit")),
