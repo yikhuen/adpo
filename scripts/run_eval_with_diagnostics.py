@@ -11,11 +11,20 @@ Example:
 
 from __future__ import annotations
 
+import csv
+import json
 import subprocess
 from pathlib import Path
-from typing import List, Optional, Sequence
+from typing import Dict, List, Optional, Sequence, Tuple
 
 import typer
+import yaml
+
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+
+
+def _resolve_path(path: Path) -> Path:
+    return path if path.is_absolute() else (_REPO_ROOT / path)
 def _latest_files(paths: Sequence[Path]) -> List[Path]:
     """Return timestamp-sorted list of existing paths."""
     existing = [p for p in paths if p.exists()]
@@ -26,6 +35,136 @@ def _auto_discover_exports(metrics_dir: Path, pattern: str = "wandb_export_*.csv
     if not metrics_dir.exists():
         return []
     return sorted(metrics_dir.glob(pattern), key=lambda p: p.stat().st_mtime, reverse=True)
+
+
+DEFAULT_EVAL_CONFIGS = {
+    "openai-judge": Path("configs/eval/judge_openai_only.yaml"),
+    "gemini-judge": Path("configs/eval/judge_gemini_only.yaml"),
+    "all-judges": Path("configs/eval/judge_gpt4o_mini.yaml"),
+}
+
+
+def _default_eval_config(eval_subcommand: str) -> Optional[Path]:
+    config = DEFAULT_EVAL_CONFIGS.get(eval_subcommand)
+    if config is None:
+        return None
+    return _resolve_path(config)
+
+
+def _load_comparison_labels(config_path: Optional[Path]) -> Dict[str, Tuple[str, str]]:
+    if config_path is None or not config_path.exists():
+        return {}
+    with config_path.open("r", encoding="utf-8") as f:
+        cfg = yaml.safe_load(f)
+    labels: Dict[str, Tuple[str, str]] = {}
+    for comparison in cfg.get("comparisons", []):
+        name = comparison.get("name")
+        if not name:
+            continue
+        model_a = str(comparison.get("a") or comparison.get("model_a") or "model_a")
+        model_b = str(comparison.get("b") or comparison.get("model_b") or "model_b")
+        labels[name] = (model_a, model_b)
+    return labels
+
+
+def _split_comparison_name(name: str) -> Tuple[str, str]:
+    if "_vs_" in name:
+        left, right = name.split("_vs_", 1)
+        return left or "model_a", right or "model_b"
+    return (name or "model_a", "model_b")
+
+
+def _ensure_local_decision_export(
+    metrics_dir: Path,
+    comparison_labels: Dict[str, Tuple[str, str]],
+) -> Optional[Path]:
+    base_dir = metrics_dir.parent
+    decisions_dir = base_dir / "decisions"
+    if not decisions_dir.exists():
+        typer.echo(f"[diagnostics] Decisions directory not found at {decisions_dir}; skipping local export.")
+        return None
+
+    decision_files = sorted(decisions_dir.glob("*.jsonl"))
+    if not decision_files:
+        typer.echo(f"[diagnostics] No decision JSONL files found under {decisions_dir}.")
+        return None
+
+    rows: List[Dict[str, object]] = []
+    for decision_file in decision_files:
+        stem = decision_file.stem
+        if "__" in stem:
+            judge_name, comparison_name = stem.split("__", 1)
+        else:
+            judge_name, comparison_name = "unknown", stem
+        model_a, model_b = comparison_labels.get(comparison_name, _split_comparison_name(comparison_name))
+
+        try:
+            with decision_file.open("r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        record = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    choice = str(record.get("choice", "")).strip().upper()
+                    if choice == "A":
+                        result = "win"
+                    elif choice == "B":
+                        result = "loss"
+                    else:
+                        result = "tie"
+                    row = {
+                        "prompt_id": record.get("id"),
+                        "comparison": comparison_name,
+                        "judge": judge_name,
+                        "model_a": model_a,
+                        "model_b": model_b,
+                        "position": "primary",
+                        "opponent_model": model_b,
+                        "choice": choice or "",
+                        "result": result,
+                        "prompt": record.get("prompt"),
+                        "response": record.get("response_a"),
+                        "opponent_response": record.get("response_b"),
+                        "response_a": record.get("response_a"),
+                        "response_b": record.get("response_b"),
+                    }
+                    rows.append(row)
+        except OSError:
+            continue
+
+    if not rows:
+        typer.echo(f"[diagnostics] Decision files at {decisions_dir} were empty; skipping local export.")
+        return None
+
+    rows.sort(key=lambda r: (str(r.get("comparison") or ""), str(r.get("judge") or ""), r.get("prompt_id") or -1))
+
+    export_path = metrics_dir / "wandb_export_local.csv"
+    metrics_dir.mkdir(parents=True, exist_ok=True)
+    fieldnames = [
+        "prompt_id",
+        "comparison",
+        "judge",
+        "model_a",
+        "model_b",
+        "position",
+        "opponent_model",
+        "choice",
+        "result",
+        "prompt",
+        "response",
+        "opponent_response",
+        "response_a",
+        "response_b",
+    ]
+    with export_path.open("w", encoding="utf-8", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(rows)
+    typer.echo(f"[diagnostics] Wrote local decision export to {export_path}")
+    return export_path
 
 app = typer.Typer(add_completion=False)
 
@@ -119,7 +258,15 @@ def main(
             return Path("research/results/eval_gemini/metrics")
         return Path("research/results/eval/metrics")
 
-    metrics_dir = _resolve_metrics_dir()
+    metrics_dir = _resolve_path(_resolve_metrics_dir())
+
+    resolved_config: Optional[Path]
+    if eval_config is not None:
+        resolved_config = _resolve_path(eval_config)
+    else:
+        resolved_config = _default_eval_config(eval_subcommand)
+    comparison_labels = _load_comparison_labels(resolved_config)
+    local_export_path = _ensure_local_decision_export(metrics_dir, comparison_labels)
 
     def _get_csv_list(explicit: Sequence[Path]) -> List[Path]:
         if explicit:
@@ -130,6 +277,9 @@ def main(
         return discovered[:1]  # default to freshest single file
 
     summary_csv_list = _get_csv_list(summary_csvs)
+    if not summary_csv_list and local_export_path is not None:
+        summary_csv_list = [local_export_path]
+
     entropy_csv_path = entropy_csv if entropy_csv else (summary_csv_list[0] if summary_csv_list else None)
     fliprate_csv_path = fliprate_csv if fliprate_csv else (summary_csv_list[0] if summary_csv_list else None)
 

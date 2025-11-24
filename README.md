@@ -186,50 +186,9 @@ Advanced WandB logging (optional) can be toggled directly in the `wandb:` block 
 
 With these toggles in place, simply run `python scripts/eval.py …` and the pipeline handles the uploads automatically.
 
-#### Minimal command sequence (eval → diagnostics)
+### Evaluate & Run Diagnostics
 
-1. **Run evaluation (example: OpenAI judge).** This generates responses, decisions, and `metrics/summary.*` locally while logging the decision table to W&B.  
-   ```bash
-   python scripts/eval.py openai-judge --force-judge \
-       --config configs/eval/judge_openai_only.yaml
-   ```
-   Switch `openai-judge` to `gemini-judge` / `all-judges` or point `--config` at a custom YAML as needed.
-2. **Download the decision-table export from W&B and park it in the matching metrics folder.**  
-   ```bash
-   # After downloading wandb_export_*.csv from the W&B UI:
-   cp ~/Downloads/wandb_export_2025-11-22T23_13_12.166+08_00.csv \
-      research/results/eval_openai/metrics/
-   ```
-   The wrapper auto-discovers `wandb_export_*.csv` in that directory, so the filename can stay as-is; pass `--summary-csv` if you keep it elsewhere.
-3. **Run diagnostics only (skips judge calls, reuses the export).**  
-   ```bash
-   python scripts/run_eval_with_diagnostics.py \
-       --eval-subcommand openai-judge \
-       --skip-eval \
-       --summary-csv research/results/eval_openai/metrics/wandb_export_2025-11-22T23_13_12.166+08_00.csv
-   ```
-   Add `--entropy-csv`/`--fliprate-csv` overrides if you want to point those diagnostics at different exports. Omit the explicit paths if you followed step 2 and let auto-discovery grab the freshest file.
-
-### Wrapper: evaluation + diagnostics
-
-Run everything (evaluation + artefacts) in one go; the wrapper auto-discovers the freshest `wandb_export_*.csv` in the corresponding metrics directory if you omit `--*-csv` flags:
-
-```bash
-python scripts/run_eval_with_diagnostics.py --eval-subcommand openai-judge
-```
-
-What it does (each step is skip-able via `--skip-*` flags):
-
-- Runs `scripts/eval.py <subcommand>` (unless `--skip-eval`).
-- Generates controller diagnostics via `scripts/plot_phase_trace.py`.
-- Produces entropy bucket stats (`scripts/entropy_bucket_eval.py`) and flip-rate diagnostics (`scripts/fliprate_check.py`).
-- Regenerates `results/eval_summary.csv` using `scripts/summarize_eval_runs.py`.
-
-Pass any combination of `--summary-csv`, `--entropy-csv`, or `--fliprate-csv` to override the auto-discovered files; all paths/flags have CLI options (`python scripts/run_eval_with_diagnostics.py --help`).
-
-### Quick run walkthrough
-
-1. **Prepare (or refresh) the dev set**  
+1. **Prepare the dev set (if needed):**
    ```bash
    python scripts/prepare_dev_set.py \
        --config configs/train/qwen25_7b_adaptive_beta.yaml \
@@ -238,34 +197,22 @@ Pass any combination of `--summary-csv`, `--entropy-csv`, or `--fliprate-csv` to
        --out data/dev.jsonl
    ```
 
-2. **Run evaluation + diagnostics** (uses OpenAI judge by default; switch `--eval-subcommand` to `gemini-judge` / `all-judges` as needed)  
+2. **Run evaluation** (choose your judge mix):
+   ```bash
+   python scripts/eval.py openai-judge --force-judge
+   # or: python scripts/eval.py gemini-judge --force-judge
+   # or: python scripts/eval.py all-judges --force-judge
+   ```
+
+3. **Run diagnostics / attachments** (works immediately; no WandB export needed):
    ```bash
    python scripts/run_eval_with_diagnostics.py --eval-subcommand openai-judge
    ```
-   - Flags like `--skip-eval`, `--skip-phase-plots`, `--skip-entropy`, etc., are available if you already have cached artefacts.
+   - Use `--skip-eval` if you only want aggregation.
+   - The wrapper auto-generates `research/results/<eval_dir>/metrics/wandb_export_local.csv` from cached `decisions/*.jsonl`. Override with `--summary-csv`, `--entropy-csv`, or `--fliprate-csv` if you have custom data.
+   - Skip components via `--skip-phase-plots`, `--skip-entropy`, `--skip-fliprate`, `--skip-summary` as needed.
 
-3. **Inspect WandB** – every run now uploads:
-   - `eval/summary_table`, `eval/decision_table`, `eval/model_stats_table`, `eval/reward_hacking_checks`
-   - `eval/entropy_buckets`, `eval/fliprate`, and `eval/aggregated_summary` when the diagnostics exist
-   - Images: response-length bar, controller plots, entropy/flip-rate plots, plus any extras listed under `attachments.extra_files`
-   - Artefact bundle containing `summary.*`, `model_stats.json`, `reward_hacking.json`, prompt manifest (`data/dev.jsonl`), full `responses/` + `decisions/`, and any additional files you configured
-
-All of the above happens automatically as long as the files referenced in the `wandb:` block exist; missing artefacts simply print `[eval] Attachment missing, skipping: …` without failing the run.
-
-Adjust the thresholds via the `reward_hacking.thresholds` block in any eval config (e.g., raise `avg_length_chars.max` if your generations are longer by design).
-
-- Generate a bar chart locally (also logged to W&B automatically):
-  ```bash
-  python scripts/plot_response_length_bar.py \
-    --model-stats <output_dir>/metrics/model_stats.json \
-    --metric avg_length_chars \
-    --output <output_dir>/response_length_bar.png
-  ```
-
-Speed tips:
-- Smaller dev set: `python scripts/prepare_dev_set.py --size 50 ...`
-- Fast dry-run: `python scripts/eval.py --config ... --limit 50`
-- Reduce decoding length via `generation.max_new_tokens` in the eval config.
+4. **Inspect WandB** – the run logs summary tables, controller plots, entropy buckets, flip rates, and bundles local artefacts automatically, provided referenced files exist.
 
 ## 8) Orchestrate complete phases (optional)
  Automate the multi-run experiments for the four study phases ([Phase 1](#phase-1), [Phase 2](#phase-2), [Phase 3](#phase-3), [Phase 4](#phase-4)):
