@@ -186,6 +186,48 @@ Advanced WandB logging (optional) can be toggled directly in the `wandb:` block 
 
 With these toggles in place, simply run `python scripts/eval.py …` and the pipeline handles the uploads automatically.
 
+### Wrapper: evaluation + diagnostics
+
+Run everything (evaluation + artefacts) in one go; the wrapper auto-discovers the freshest `wandb_export_*.csv` in the corresponding metrics directory if you omit `--*-csv` flags:
+
+```bash
+python scripts/run_eval_with_diagnostics.py --eval-subcommand openai-judge
+```
+
+What it does (each step is skip-able via `--skip-*` flags):
+
+- Runs `scripts/eval.py <subcommand>` (unless `--skip-eval`).
+- Generates controller diagnostics via `scripts/plot_phase_trace.py`.
+- Produces entropy bucket stats (`scripts/entropy_bucket_eval.py`) and flip-rate diagnostics (`scripts/fliprate_check.py`).
+- Regenerates `results/eval_summary.csv` using `scripts/summarize_eval_runs.py`.
+
+Pass any combination of `--summary-csv`, `--entropy-csv`, or `--fliprate-csv` to override the auto-discovered files; all paths/flags have CLI options (`python scripts/run_eval_with_diagnostics.py --help`).
+
+### Quick run walkthrough
+
+1. **Prepare (or refresh) the dev set**  
+   ```bash
+   python scripts/prepare_dev_set.py \
+       --config configs/train/qwen25_7b_adaptive_beta.yaml \
+       --size 200 \
+       --split eval \
+       --out data/dev.jsonl
+   ```
+
+2. **Run evaluation + diagnostics** (uses OpenAI judge by default; switch `--eval-subcommand` to `gemini-judge` / `all-judges` as needed)  
+   ```bash
+   python scripts/run_eval_with_diagnostics.py --eval-subcommand openai-judge
+   ```
+   - Flags like `--skip-eval`, `--skip-phase-plots`, `--skip-entropy`, etc., are available if you already have cached artefacts.
+
+3. **Inspect WandB** – every run now uploads:
+   - `eval/summary_table`, `eval/decision_table`, `eval/model_stats_table`, `eval/reward_hacking_checks`
+   - `eval/entropy_buckets`, `eval/fliprate`, and `eval/aggregated_summary` when the diagnostics exist
+   - Images: response-length bar, controller plots, entropy/flip-rate plots, plus any extras listed under `attachments.extra_files`
+   - Artefact bundle containing `summary.*`, `model_stats.json`, `reward_hacking.json`, prompt manifest (`data/dev.jsonl`), full `responses/` + `decisions/`, and any additional files you configured
+
+All of the above happens automatically as long as the files referenced in the `wandb:` block exist; missing artefacts simply print `[eval] Attachment missing, skipping: …` without failing the run.
+
 Adjust the thresholds via the `reward_hacking.thresholds` block in any eval config (e.g., raise `avg_length_chars.max` if your generations are longer by design).
 
 - Generate a bar chart locally (also logged to W&B automatically):
