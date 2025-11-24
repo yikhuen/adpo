@@ -6,6 +6,7 @@ import sys
 import time
 from copy import deepcopy
 from pathlib import Path
+import hashlib
 from typing import Any, Dict, List, Optional, Tuple
 
 # Ensure local src/ is importable when running as a script
@@ -591,6 +592,7 @@ def log_results_to_wandb(
     reward_hacking_report: Optional[Dict[str, Any]],
     reward_hacking_path: Optional[Path],
     qualitative_samples_by_model: Optional[Dict[str, List[Dict[str, Any]]]] = None,
+    output_dir: Optional[Path] = None,
 ):
     wandb_cfg = cfg.get("wandb", {})
     if not wandb_cfg.get("enabled"):
@@ -628,6 +630,93 @@ def log_results_to_wandb(
         },
         allow_val_change=True,
     )
+
+    wandb_output_dir = Path(output_dir) if output_dir else None
+
+    def _truncate_text(value: Any, limit: int) -> str:
+        if value is None:
+            return ""
+        text = str(value)
+        if limit > 0 and len(text) > limit:
+            return text[:limit] + "…"
+        return text
+
+    def _safe_path(path_value: Optional[str]) -> Optional[Path]:
+        if not path_value:
+            return None
+        path = Path(path_value)
+        return path if path.exists() else None
+
+    def _safe_add_path(artifact: "wandb.Artifact", path: Path, *, name: Optional[str] = None) -> None:
+        if not path.exists():
+            typer.echo(f"[eval] Attachment missing, skipping: {path}")
+            return
+        if path.is_dir():
+            artifact.add_dir(str(path), name=name or path.name)
+        else:
+            artifact.add_file(str(path), name=name or path.name)
+
+    def _log_json_table(table_key: str, json_path: Path) -> None:
+        try:
+            data = json.loads(json_path.read_text(encoding="utf-8"))
+        except Exception:
+            typer.echo(f"[eval] Unable to read JSON summary at {json_path}")
+            return
+        if not isinstance(data, list) or not data:
+            return
+        columns = sorted({key for row in data if isinstance(row, dict) for key in row.keys()})
+        if not columns:
+            return
+        table = wandb.Table(columns=columns)
+        for row in data:
+            table.add_data(*[row.get(col) for col in columns])
+        run.log({table_key: table}, commit=False)
+
+    def _build_decision_table(decision_paths: List[Path], max_rows: int, prompt_chars: int):
+        if not decision_paths or max_rows <= 0:
+            return None
+        table = wandb.Table(
+            columns=[
+                "comparison",
+                "judge",
+                "prompt_id",
+                "prompt",
+                "response_a",
+                "response_b",
+                "choice",
+            ]
+        )
+        rows_added = 0
+        for path in decision_paths:
+            stem = path.stem
+            if "__" in stem:
+                judge_name, comparison_name = stem.split("__", 1)
+            else:
+                judge_name, comparison_name = "unknown", stem
+            try:
+                with path.open("r", encoding="utf-8") as f:
+                    for line in f:
+                        if rows_added >= max_rows:
+                            break
+                        try:
+                            record = json.loads(line)
+                        except json.JSONDecodeError:
+                            continue
+                        table.add_data(
+                            comparison_name,
+                            judge_name,
+                            record.get("id"),
+                            _truncate_text(record.get("prompt"), prompt_chars),
+                            _truncate_text(record.get("response_a"), prompt_chars),
+                            _truncate_text(record.get("response_b"), prompt_chars),
+                            record.get("choice"),
+                        )
+                        rows_added += 1
+            except OSError:
+                continue
+            if rows_added >= max_rows:
+                break
+        return table if rows_added else None
 
     if wandb_cfg.get("log_table", True):
         table = wandb.Table(
@@ -840,6 +929,116 @@ def log_results_to_wandb(
         artifact.add_file(str(model_stats_path), name="model_stats.json")
     if reward_hacking_path is not None and reward_hacking_report:
         artifact.add_file(str(reward_hacking_path), name="reward_hacking.json")
+
+    # Decision table logging and attachments
+    decision_cfg = wandb_cfg.get("decision_table", {})
+    if decision_cfg.get("enabled"):
+        max_rows = int(decision_cfg.get("max_rows", 200))
+        prompt_chars = int(decision_cfg.get("prompt_chars", 512))
+        decision_paths: List[Path] = []
+        if wandb_output_dir:
+            decisions_dir = wandb_output_dir / "decisions"
+            if decisions_dir.exists():
+                decision_paths.extend(sorted(decisions_dir.glob("*.jsonl")))
+        for custom in decision_cfg.get("paths", []):
+            custom_path = _safe_path(custom)
+            if custom_path:
+                decision_paths.append(custom_path)
+        decision_table = _build_decision_table(decision_paths, max_rows, prompt_chars)
+        if decision_table is not None:
+            run.log({"eval/decision_table": decision_table}, commit=False)
+
+    attachments_cfg = wandb_cfg.get("attachments", {})
+    prompt_manifest_path: Optional[Path] = None
+    if attachments_cfg.get("include_prompt_file"):
+        prompt_file_cfg = attachments_cfg.get("prompt_file") or cfg.get("prompts", {}).get("path")
+        prompt_manifest_path = _safe_path(prompt_file_cfg)
+        if prompt_manifest_path:
+            _safe_add_path(artifact, prompt_manifest_path, name=attachments_cfg.get("prompt_file_name") or "prompts.jsonl")
+            try:
+                prompt_hash = hashlib.sha256(prompt_manifest_path.read_bytes()).hexdigest()
+                run.config.update({"prompt_manifest_sha256": prompt_hash}, allow_val_change=True)
+            except OSError:
+                typer.echo(f"[eval] Unable to hash prompt file at {prompt_manifest_path}")
+
+    if attachments_cfg.get("include_decisions_dir") and wandb_output_dir:
+        decisions_dir = wandb_output_dir / "decisions"
+        if decisions_dir.exists():
+            _safe_add_path(artifact, decisions_dir, name=attachments_cfg.get("decisions_name") or "decisions")
+
+    if attachments_cfg.get("include_responses_dir") and wandb_output_dir:
+        responses_dir = wandb_output_dir / "responses"
+        if responses_dir.exists():
+            _safe_add_path(artifact, responses_dir, name=attachments_cfg.get("responses_name") or "responses")
+
+    for extra_entry in attachments_cfg.get("extra_files", []):
+        path_value = extra_entry.get("path") if isinstance(extra_entry, dict) else extra_entry
+        if not path_value:
+            continue
+        extra_path = _safe_path(path_value)
+        if not extra_path:
+            continue
+        name_override = extra_entry.get("name") if isinstance(extra_entry, dict) else None
+        _safe_add_path(artifact, extra_path, name=name_override)
+        if isinstance(extra_entry, dict) and extra_entry.get("log_image"):
+            try:
+                run.log({f"eval/{name_override or extra_path.stem}": wandb.Image(str(extra_path))}, commit=False)
+            except Exception:
+                typer.echo(f"[eval] Failed to log image for attachment {extra_path}")
+
+    phase_cfg = wandb_cfg.get("phase_trace", {}) or {}
+    phase_json_path = _safe_path(phase_cfg.get("json"))
+    if phase_json_path:
+        _safe_add_path(artifact, phase_json_path, name=phase_cfg.get("json_name") or "phase_trace.json")
+        try:
+            phase_stats = json.loads(phase_json_path.read_text(encoding="utf-8"))
+            run.summary["phase_trace_stats"] = phase_stats
+        except Exception:
+            typer.echo(f"[eval] Unable to parse phase trace stats from {phase_json_path}")
+    for plot_path in phase_cfg.get("plots", []):
+        plot = _safe_path(plot_path)
+        if not plot:
+            continue
+        try:
+            run.log({f"phase_trace/{plot.stem}": wandb.Image(str(plot))}, commit=False)
+        except Exception:
+            typer.echo(f"[eval] Failed to log phase trace plot {plot}")
+        _safe_add_path(artifact, plot, name=plot.name)
+
+    def _handle_summary_block(block_name: str, cfg_key: str) -> None:
+        block = wandb_cfg.get(cfg_key)
+        if not isinstance(block, dict):
+            return
+        summary_path = _safe_path(block.get("summary"))
+        if summary_path:
+            _log_json_table(block_name, summary_path)
+            _safe_add_path(artifact, summary_path, name=block.get("summary_name") or summary_path.name)
+        plot_path = _safe_path(block.get("plot"))
+        if plot_path:
+            try:
+                run.log({f"{block_name}_plot": wandb.Image(str(plot_path))}, commit=False)
+            except Exception:
+                typer.echo(f"[eval] Failed to log plot for {cfg_key} at {plot_path}")
+            _safe_add_path(artifact, plot_path, name=plot_path.name)
+
+    _handle_summary_block("eval/entropy_buckets", "entropy_buckets")
+    _handle_summary_block("eval/fliprate", "fliprate")
+
+    eval_summary_cfg = wandb_cfg.get("eval_summary") or {}
+    eval_summary_path = _safe_path(eval_summary_cfg.get("path"))
+    if eval_summary_path:
+        try:
+            with eval_summary_path.open("r", encoding="utf-8") as f:
+                reader = csv.DictReader(f)
+                if reader.fieldnames:
+                    summary_table = wandb.Table(columns=reader.fieldnames)
+                    for row in reader:
+                        summary_table.add_data(*[row.get(col) for col in reader.fieldnames])
+                    run.log({"eval/aggregated_summary": summary_table}, commit=False)
+        except Exception:
+            typer.echo(f"[eval] Failed to build aggregated summary table from {eval_summary_path}")
+        _safe_add_path(artifact, eval_summary_path, name=eval_summary_cfg.get("name") or eval_summary_path.name)
+
     run.log_artifact(artifact)
 
     run.finish()
@@ -1046,6 +1245,7 @@ def run_evaluation(
         reward_hacking_report=reward_hacking_report,
         reward_hacking_path=reward_hacking_path,
         qualitative_samples_by_model=qualitative_by_model,
+        output_dir=output_dir,
     )
 
     # Judge agreement

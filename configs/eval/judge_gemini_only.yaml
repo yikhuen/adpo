@@ -57,6 +57,31 @@ wandb:
   log_table: true
   artifact_name: phase2-gemini-metrics
   artifact_type: evaluation
+  decision_table:
+    enabled: true
+    max_rows: 200
+    prompt_chars: 512
+  attachments:
+    include_prompt_file: true
+    prompt_file: data/dev.jsonl
+    include_decisions_dir: true
+    include_responses_dir: true
+    extra_files:
+      - path: results/eval_summary.csv
+        name: eval_summary.csv
+  phase_trace:
+    json: outputs/adaptive_beta/phase_trace.json
+    plots:
+      - results/controller_plots/qwen25_adaptive_phase_portrait.png
+      - results/controller_plots/qwen25_adaptive_beta_kl_time.png
+  entropy_buckets:
+    summary: results/entropy_bucket_summary.json
+    plot: results/entropy_bucket_plot.png
+  fliprate:
+    summary: results/fliprate_summary.json
+    plot: results/fliprate_plot.png
+  eval_summary:
+    path: results/eval_summary.csv
   bar_chart:
     enabled: true
     name: eval/phase2_gemini_bar

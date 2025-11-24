@@ -121,6 +121,71 @@ Artifacts land in the directory specified by the chosen config (defaults: `resea
 - `metrics/model_stats.json` – reward-hacking sanity check: Avg response length, refusal/safety rates per model
 - `metrics/reward_hacking.json` – heuristic flags comparing those stats against configurable thresholds
 
+Advanced WandB logging (optional) can be toggled directly in the `wandb:` block of any eval config. Besides the built-in summary/model tables, you can enable:
+
+- **Decision table**  
+  ```yaml
+  wandb:
+    decision_table:
+      enabled: true
+      max_rows: 200          # optional cap (default 200)
+      prompt_chars: 512      # truncate long prompts/responses
+      paths: []              # optional extra decision JSONL paths
+  ```
+  This logs `eval/decision_table`, sampling rows from `decisions/*.jsonl`.
+
+- **Attachments** – bundle raw artefacts into the eval run:
+  ```yaml
+  wandb:
+    attachments:
+      include_prompt_file: true          # attach data/dev.jsonl (or override below)
+      prompt_file: data/dev.jsonl        # optional path override
+      prompt_file_name: prompts.jsonl    # rename inside the artifact
+      include_decisions_dir: true        # attach decisions/
+      include_responses_dir: true        # attach responses/
+      decisions_name: decisions         # optional rename
+      responses_name: responses
+      extra_files:                       # arbitrary files or directories
+        - path: results/entropy_bucket_summary.json
+          name: entropy_bucket_summary.json
+        - path: results/controller_plots/qwen25_adaptive_phase_portrait.png
+          log_image: true                # also log as wandb.Image
+  ```
+
+- **Controller diagnostics**  
+  ```yaml
+  wandb:
+    phase_trace:
+      json: outputs/adaptive_beta/phase_trace.json
+      plots:
+        - results/controller_plots/qwen25_adaptive_phase_portrait.png
+        - results/controller_plots/qwen25_adaptive_beta_kl_time.png
+  ```
+  The JSON gets hashed into `run.summary["phase_trace_stats"]` and each plot is logged as `wandb.Image`.
+
+- **Entropy buckets / flip-rate summaries**  
+  ```yaml
+  wandb:
+    entropy_buckets:
+      summary: results/entropy_bucket_summary.json
+      plot: results/entropy_bucket_plot.png
+    fliprate:
+      summary: results/fliprate_summary.json
+      plot: results/fliprate_plot.png
+  ```
+  Each JSON becomes a table (`eval/entropy_buckets`, `eval/fliprate`) and associated plots are uploaded if present.
+
+- **Aggregated summary from `summarize_eval_runs.py`**
+  ```yaml
+  wandb:
+    eval_summary:
+      path: results/eval_summary.csv
+      name: eval_summary.csv
+  ```
+  A table `eval/aggregated_summary` is logged and the CSV is bundled into the artifact.
+
+With these toggles in place, simply run `python scripts/eval.py …` and the pipeline handles the uploads automatically.
+
 Adjust the thresholds via the `reward_hacking.thresholds` block in any eval config (e.g., raise `avg_length_chars.max` if your generations are longer by design).
 
 - Generate a bar chart locally (also logged to W&B automatically):
