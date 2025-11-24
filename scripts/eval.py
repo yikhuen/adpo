@@ -27,6 +27,16 @@ from adaptive_dpo.utils.generate import generate_batch
 from unsloth import FastLanguageModel
 
 try:
+    from tqdm import tqdm  # type: ignore
+except ImportError:  # pragma: no cover - tqdm is optional
+    tqdm = None
+def _progress(iterable, *, total: Optional[int] = None, desc: Optional[str] = None):
+    """Wrap iterable with tqdm when available."""
+    if tqdm is None:
+        return iterable
+    return tqdm(iterable, total=total, desc=desc, leave=False)
+
+try:
     from plot_ablation_bar import build_ablation_bar_figure
 except ImportError:  # pragma: no cover - helper script may be unavailable in some contexts
     build_ablation_bar_figure = None
@@ -261,7 +271,13 @@ def ensure_responses(
 
     prompt_texts = [p["prompt"] for p in prompts]
     outputs: List[str] = []
-    for i in range(0, len(prompt_texts), batch_size):
+    total_batches = max(1, (len(prompt_texts) + batch_size - 1) // batch_size)
+    batch_iter = _progress(
+        range(0, len(prompt_texts), batch_size),
+        total=total_batches,
+        desc=f"{name} generation",
+    )
+    for i in batch_iter:
         chunk = prompt_texts[i : i + batch_size]
         batch_outputs = generate_batch(model, tokenizer, chunk, max_new_tokens=max_new_tokens)
         for prompt_text, full_text in zip(chunk, batch_outputs):
@@ -462,7 +478,12 @@ def evaluate_comparison(
                 decisions = [json.loads(line) for line in f]
         else:
             decisions = []
-            for prompt_obj, resp_a, resp_b in zip(prompts, responses_a, responses_b):
+            decision_iter = _progress(
+                zip(prompts, responses_a, responses_b),
+                total=len(prompts),
+                desc=f"{judge.name}: {comparison['name']}",
+            )
+            for prompt_obj, resp_a, resp_b in decision_iter:
                 choice = judge.judge(prompt_obj["prompt"], resp_a["response"], resp_b["response"])
                 decisions.append(
                     {
