@@ -4,6 +4,17 @@
 - **Objective:** Demonstrate that the adaptive β controller stabilises training while preserving (or improving) win rate relative to fixed and annealed β baselines.
 - **Scope:** Single-seed Phase 2 run using only the OpenAI judge pathway (`configs/eval/judge_openai_only.yaml`). All comparisons are Adaptive vs. Fixed β and Adaptive vs. Base, plus an Adaptive vs. Annealed check.
 
+## Optional Pre-check: Judge-side Entropy vs. Flip Rate
+
+Before committing to entropy-aware adaptive β on a new RLHF slice, we now run a *cheap* diagnostic with the OpenAI API (or any API judge that exposes `logprobs`):
+
+1. **Sample** ~60–90 preference pairs (stratified by prompt type / length).  
+2. **Approximate entropy** with `scripts/fliprate_check.py` (uses `logprobs=True`, `top_logprobs=20`, renormalises, and averages per-token entropy or NLL).  
+3. **Bucket** into low / medium / high entropy.  
+4. **Re-judge** each pair `K=3` times to estimate flip rates.  
+
+If high-entropy buckets do *not* exhibit dramatically higher flip rates, we treat the dataset as mostly epistemic and proceed with adaptive β. Otherwise, we either filter the noisy slice or revert to a conservative fixed/annealed β schedule.
+
 ## Experimental Setup
 - **Base model:** `Qwen/Qwen2.5-7B-Instruct` loaded in 4-bit (QLoRA) with context length 4096.
 - **Data:** UltraFeedback preference pairs (`sample_frac: 0.005`) with standard system prompt formatting from `scripts/prepare_dev_set.py`.
@@ -24,16 +35,51 @@
   - **Annealed β schedule:** cosine from 0.20 → 0.05 (`configs/train/qwen25_7b_annealed_beta.yaml`).
 - **Evaluation:** `python scripts/eval.py openai-judge --force-judge` (OpenAI `gpt-4o-mini` judge) on a 200-prompt dev set. Results logged to Weights & Biases and exported as `wandb_export_*.csv`.
 
-## Quantitative Results (OpenAI Judge)
-| Match-up            | Wins | Losses | Win Rate |
-|---------------------|-----:|-------:|---------:|
-| Adaptive vs. Base   |   16 |      4 | **80%**  |
-| Adaptive vs. Fixed  |   16 |      4 | **80%**  |
-| Adaptive vs. Annealed |  7 |      3 | **70%**  |
-| **Overall**         | **39** | **11** | **78%** |
+## Reproducible Evaluation Pipeline
 
-- Each CSV row is normalised to the Adaptive perspective (rows with `position="B"` and `result="loss"` denote opponent losses). See `scripts/eval.py` lines 948–967 for row construction.
-- Adaptive wins decisively against both base and fixed baselines, and holds a sizeable margin over the annealed controller despite a harder opponent.
+We now consolidate all OpenAI-judge exports via `scripts/summarize_eval_runs.py`:
+
+```bash
+python scripts/summarize_eval_runs.py \
+    --csv wandb_export_2025-11-22T23_13_12.166+08_00.csv \
+    --csv wandb_export_2025-11-22T23_13_26.881+08_00.csv \
+    --csv wandb_export_2025-11-22T23_13_42.488+08_00.csv \
+    --csv wandb_export_2025-11-22T23_14_46.860+08_00.csv \
+    --save results/eval_summary.csv
+```
+
+This script infers which side is adaptive, aggregates wins per baseline, and prints Wilson 95% confidence intervals. Once the larger-n evals (50–100 prompts / match-up) are run, replace the CSV paths above and regenerate the summary table for the paper.
+
+> **Action item:** re-run `scripts/eval.py openai-judge ...` with ≥50 prompts per trained model (β=0.05, 0.10, 0.20, annealed, adaptive) before final submission, then feed the exports into `summarize_eval_runs.py` to refresh the table below.
+
+| Match-up (old 20-prompt run) | Wins | Losses | Win Rate |
+|------------------------------|-----:|-------:|---------:|
+| Adaptive vs. Base            |   16 |      4 | **80%**  |
+| Adaptive vs. Fixed           |   16 |      4 | **80%**  |
+| Adaptive vs. Annealed        |    7 |      3 | **70%**  |
+| **Overall**                  | **39** | **11** | **78%** |
+
+*The table above is the previous 20-prompt snapshot; replace it once the new eval script is run.*
+
+## Controller Diagnostics
+
+To demonstrate that β spikes are rare and well-correlated with KL spikes, we added `scripts/plot_phase_trace.py`:
+
+```bash
+python scripts/plot_phase_trace.py \
+    --phase-trace outputs/adaptive_beta/phase_trace.json \
+    --output-dir results/controller_plots \
+    --run-label qwen25_adaptive \
+    --base-band 0.08 0.20
+```
+
+Outputs:
+- `*_phase_portrait.png`: β_total vs KL_ema phase plot (colour = step).
+- `*_beta_kl_time.png`: β_total and KL_ema vs step (reveals “punch & cooldown” cycles).
+- `*_beta_hist.png`: histogram of β_total.
+- `*_beta_summary.json`: coverage statistics (fraction of steps in base band, spike rate, max β).
+
+These artefacts go directly into the Mechanism section and appendix.
 
 ## Mechanism of Action: The Step 254 Intervention
 
@@ -56,6 +102,7 @@ To understand why the Adaptive model achieved a 78% win rate with identical aggr
 
 - **Action:** The controller calculates $\beta_{total} = \beta_{base} \times \text{EntropyScalar}$.
 - **Telemetry evidence (`train/beta`):** The adaptive run (blue line) shows a distinct upward bump. This is the record of the controller tightening the "rules of engagement" for this specific batch.
+- **New diagnostic:** `scripts/plot_phase_trace.py` now captures these spikes across the full run (phase portrait + time series).
 
 **Step 4: Margin Calculation (The Inflation)**
 
@@ -83,6 +130,7 @@ To understand why the Adaptive model achieved a 78% win rate with identical aggr
 - **Event:** Because the discriminator forced a large, meaningful update, the model "jumps" to a new location in parameter space.
 - **Telemetry evidence (`train/kl_batch`):** A **sharp spike** appears in the adaptive run (the "skid marks"), indicating an aggressive but targeted correction.
 - **Telemetry evidence (`train/kl_ema`):** The EMA line remains relatively flat, showing that the maneuver was elastic and the model rapidly re-stabilized instead of entering a divergence spiral.
+- **Planned quantification:** After re-running training, use the histogram/summary emitted by `scripts/plot_phase_trace.py` to report the fraction of steps where $\beta_{total}$ stays in the base band vs. spike band.
 
 ### 2. Theoretical Insight: Signal Amplification
 
@@ -125,4 +173,44 @@ Q: "আপু অনেক নিতে পারে। উফ কিভাব�
   - Document additional qualitative wins/losses, especially borderline refusals, for poster material.
 
 Phase 2 concludes that the robust hybrid controller meets its target: higher win rates without manual β sweeps.
+
+## Appendix
+
+- [🥷 Step-254 Telemetry Screenshots](./figures/step254/)
+- [🧠 Prompt Snippet & Translation](./figures/step254/bengali_prompt.txt)
+- [📊 W&B Run Exports (`wandb_export_*.csv`)](./exports/)
+- [🧮 Eval summariser: `scripts/summarize_eval_runs.py`](../scripts/summarize_eval_runs.py)
+- [🔄 Controller plots: `scripts/plot_phase_trace.py`](../scripts/plot_phase_trace.py)
+- [📈 Entropy buckets: `scripts/entropy_bucket_eval.py`](../scripts/entropy_bucket_eval.py)
+- [🧪 Flip-rate sanity check: `scripts/fliprate_check.py`](../scripts/fliprate_check.py)
+
+### Entropy Bucket Analysis (to be populated after larger-n eval)
+
+1. Re-run `scripts/eval.py openai-judge ...` with ≥50 prompts for adaptive and the best static β baseline.
+2. Execute:
+
+```bash
+python scripts/entropy_bucket_eval.py \
+    --csv wandb_export_adaptive_vs_fixed.csv \
+    --model outputs/adaptive_beta \
+    --text-column prompt \
+    --buckets 0.3 0.6 \
+    --output results/entropy_bucket_summary.json
+```
+
+3. Paste the resulting Markdown table / figure here, highlighting whether adaptive gains concentrate in the high-entropy bucket.
+
+### Flip-rate Sanity Check (optional)
+
+```bash
+python scripts/fliprate_check.py \
+    --csv wandb_export_adaptive_vs_fixed.csv \
+    --samples 90 \
+    --per-bucket 30 \
+    --repeats 3 \
+    --model gpt-4o-mini \
+    --output results/fliprate_summary.json
+```
+
+Use the JSON summary to support the claim that high-entropy prompts are not dominated by aleatoric noise (e.g., “average flip rate remained below 12% across buckets on a 90-sample diagnostic”).
 
