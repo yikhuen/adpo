@@ -186,6 +186,30 @@ Advanced WandB logging (optional) can be toggled directly in the `wandb:` block 
 
 With these toggles in place, simply run `python scripts/eval.py …` and the pipeline handles the uploads automatically.
 
+#### Minimal command sequence (eval → diagnostics)
+
+1. **Run evaluation (example: OpenAI judge).** This generates responses, decisions, and `metrics/summary.*` locally while logging the decision table to W&B.  
+   ```bash
+   python scripts/eval.py openai-judge --force-judge \
+       --config configs/eval/judge_openai_only.yaml
+   ```
+   Switch `openai-judge` to `gemini-judge` / `all-judges` or point `--config` at a custom YAML as needed.
+2. **Download the decision-table export from W&B and park it in the matching metrics folder.**  
+   ```bash
+   # After downloading wandb_export_*.csv from the W&B UI:
+   cp ~/Downloads/wandb_export_2025-11-22T23_13_12.166+08_00.csv \
+      research/results/eval_openai/metrics/
+   ```
+   The wrapper auto-discovers `wandb_export_*.csv` in that directory, so the filename can stay as-is; pass `--summary-csv` if you keep it elsewhere.
+3. **Run diagnostics only (skips judge calls, reuses the export).**  
+   ```bash
+   python scripts/run_eval_with_diagnostics.py \
+       --eval-subcommand openai-judge \
+       --skip-eval \
+       --summary-csv research/results/eval_openai/metrics/wandb_export_2025-11-22T23_13_12.166+08_00.csv
+   ```
+   Add `--entropy-csv`/`--fliprate-csv` overrides if you want to point those diagnostics at different exports. Omit the explicit paths if you followed step 2 and let auto-discovery grab the freshest file.
+
 ### Wrapper: evaluation + diagnostics
 
 Run everything (evaluation + artefacts) in one go; the wrapper auto-discovers the freshest `wandb_export_*.csv` in the corresponding metrics directory if you omit `--*-csv` flags:

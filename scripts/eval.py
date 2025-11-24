@@ -404,13 +404,13 @@ class PairwiseJudge:
         if self.system_prompt:
             input_text = f"{self.system_prompt.strip()}\n\n{input_text}"
         inputs = self.tokenizer(input_text, return_tensors="pt").to(self.model.device)
-    with torch.no_grad():
+        with torch.no_grad():
             outputs = self.model.generate(
-            **inputs,
-            do_sample=False,
+                **inputs,
+                do_sample=False,
                 temperature=self.temperature,
                 max_new_tokens=self.max_tokens,
-        )
+            )
             generated = outputs[0][inputs.input_ids.shape[1] :]
         text = self.tokenizer.decode(generated, skip_special_tokens=True)
         return self._parse_choice(text)
