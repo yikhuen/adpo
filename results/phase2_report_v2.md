@@ -15,6 +15,25 @@ Our **robust_hybrid** controller should amplify weak preference signals only whe
 - **Baselines:** Fixed β = 0.10 and cosine-annealed β from 0.20→0.05 (same optimizer & schedule).
 - **Judge:** OpenAI `gpt-4o-mini` on 200 prompts per matchup (`scripts/eval.py openai-judge --force-judge ...`). Raw logs live in `eval_results/primary__adaptive_vs_*.jsonl`.
 
+#### 2.1 Robust Hybrid Controller Mechanics
+We factor the total β applied in the DPO margin as
+
+$$\beta_{\text{total}}^t = \beta_{\text{base}}^t \times \text{EntropyScalar}^t.$$
+
+**Slow loop – KL PID:** After every step we compute the KL error $e^t = \text{KL}_\text{ema}^t - 0.04$ and update the base multiplier with integral control inside a ±10 % deadband:
+
+$$\beta_{\text{base}}^{t+1} = \beta_{\text{base}}^t \cdot \exp(\eta \cdot e^t).$$
+
+This loop keeps the average KL near the target without reacting to single noisy batches; the exponential form ensures positivity while the deadband avoids micro-chatter.
+
+**Fast loop – entropy spike:** When a batch appears ambiguous we inflate the loss by setting
+
+$$\text{EntropyScalar}^t = 1 + \lambda \cdot \tilde{H}^t,$$
+
+where $\tilde{H}^t$ is the normalized per-token entropy (clamped to maintain β within [0.05, 2.0]). This loop “punches” on high-uncertainty batches so the optimizer must open a larger margin before the loss drops, but it returns to 1.0 as soon as entropy subsides.
+
+Together the loops explain the telemetry we track later: the slow PID keeps KL pinned, while the fast entropy gate ensures that the controller only amplifies weak signals instead of overwriting confident priors.
+
 ### 3. Controller Telemetry
 
 #### 3.1 KL Regulation
