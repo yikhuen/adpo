@@ -84,7 +84,6 @@ def plot_phase_portrait(metrics: dict[str, np.ndarray], output: Path, label: str
         linewidth=0.2,
         alpha=0.85,
     )
-    plt.plot(metrics["kl_ema"], metrics["beta"], color="orange", alpha=0.3, linewidth=1)
     plt.title(f"β_total vs KL_ema – {label}")
     plt.xlabel("KL_ema")
     plt.ylabel("β_total")

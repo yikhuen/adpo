@@ -953,21 +953,85 @@ def log_results_to_wandb(
 
     # Decision table logging and attachments
     decision_cfg = wandb_cfg.get("decision_table", {})
+    decision_paths: List[Path] = []
+    if wandb_output_dir:
+        decisions_dir = wandb_output_dir / "decisions"
+        if decisions_dir.exists():
+            decision_paths.extend(sorted(decisions_dir.glob("*.jsonl")))
+    for custom in decision_cfg.get("paths", []):
+        custom_path = _safe_path(custom)
+        if custom_path:
+            decision_paths.append(custom_path)
+    # Deduplicate while preserving order
+    deduped_paths: List[Path] = []
+    seen_paths: set = set()
+    for path in decision_paths:
+        if path in seen_paths:
+            continue
+        seen_paths.add(path)
+        deduped_paths.append(path)
+    decision_paths = deduped_paths
+
     if decision_cfg.get("enabled"):
         max_rows = int(decision_cfg.get("max_rows", 200))
         prompt_chars = int(decision_cfg.get("prompt_chars", 512))
-        decision_paths: List[Path] = []
-        if wandb_output_dir:
-            decisions_dir = wandb_output_dir / "decisions"
-            if decisions_dir.exists():
-                decision_paths.extend(sorted(decisions_dir.glob("*.jsonl")))
-        for custom in decision_cfg.get("paths", []):
-            custom_path = _safe_path(custom)
-            if custom_path:
-                decision_paths.append(custom_path)
         decision_table = _build_decision_table(decision_paths, max_rows, prompt_chars)
         if decision_table is not None:
             run.log({"eval/decision_table": decision_table}, commit=False)
+
+    raw_decisions_cfg = wandb_cfg.get("raw_decisions", {})
+    if raw_decisions_cfg.get("enabled", True) and decision_paths:
+        table_name = raw_decisions_cfg.get("table_name", "eval/raw_decisions_full")
+        prompt_chars = int(raw_decisions_cfg.get("prompt_chars", 1024))
+        response_chars = int(raw_decisions_cfg.get("response_chars", 1024))
+        raw_table = wandb.Table(
+            columns=[
+                "comparison",
+                "judge",
+                "prompt_id",
+                "prompt",
+                "response_a",
+                "response_b",
+                "choice",
+            ]
+        )
+        raw_rows = 0
+        for path in decision_paths:
+            stem = path.stem
+            if "__" in stem:
+                judge_name, comparison_name = stem.split("__", 1)
+            else:
+                judge_name, comparison_name = "unknown", stem
+            try:
+                with path.open("r", encoding="utf-8") as f:
+                    for line in f:
+                        record_line = line.strip()
+                        if not record_line:
+                            continue
+                        try:
+                            record = json.loads(record_line)
+                        except json.JSONDecodeError:
+                            continue
+                        raw_table.add_data(
+                            comparison_name,
+                            judge_name,
+                            record.get("id"),
+                            _truncate_text(record.get("prompt"), prompt_chars),
+                            _truncate_text(record.get("response_a"), response_chars),
+                            _truncate_text(record.get("response_b"), response_chars),
+                            record.get("choice"),
+                        )
+                        raw_rows += 1
+            except OSError:
+                continue
+        if raw_rows:
+            run.log({table_name: raw_table}, commit=False)
+        artifact_prefix = raw_decisions_cfg.get("artifact_prefix", "raw_decisions")
+        for path in decision_paths:
+            try:
+                artifact.add_file(str(path), name=f"{artifact_prefix}/{path.name}")
+            except Exception:
+                pass
 
     attachments_cfg = wandb_cfg.get("attachments", {})
     prompt_manifest_path: Optional[Path] = None
@@ -991,6 +1055,16 @@ def log_results_to_wandb(
         responses_dir = wandb_output_dir / "responses"
         if responses_dir.exists():
             _safe_add_path(artifact, responses_dir, name=attachments_cfg.get("responses_name") or "responses")
+
+    if attachments_cfg.get("include_generations_dir") and wandb_output_dir:
+        generations_dir = wandb_output_dir / "generations"
+        if generations_dir.exists():
+            _safe_add_path(artifact, generations_dir, name=attachments_cfg.get("generations_name") or "generations")
+
+    if attachments_cfg.get("include_prompts") and wandb_output_dir:
+        prompts_dir = wandb_output_dir / "prompts"
+        if prompts_dir.exists():
+            _safe_add_path(artifact, prompts_dir, name=attachments_cfg.get("prompts_name") or "prompts")
 
     for extra_entry in attachments_cfg.get("extra_files", []):
         path_value = extra_entry.get("path") if isinstance(extra_entry, dict) else extra_entry

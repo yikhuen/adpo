@@ -143,6 +143,8 @@ Advanced WandB logging (optional) can be toggled directly in the `wandb:` block 
       prompt_file_name: prompts.jsonl    # rename inside the artifact
       include_decisions_dir: true        # attach decisions/
       include_responses_dir: true        # attach responses/
+      include_generations_dir: true      # attach generations/ (raw judge comparisons)
+      include_prompts: true              # attach prompts/ (per-eval prompt cache)
       decisions_name: decisions         # optional rename
       responses_name: responses
       extra_files:                       # arbitrary files or directories

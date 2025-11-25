@@ -67,6 +67,8 @@ wandb:
     prompt_file: data/dev.jsonl
     include_decisions_dir: true
     include_responses_dir: true
+    include_generations_dir: true
+    include_prompts: true
     extra_files:
       - path: results/eval_summary.csv
         name: eval_summary.csv
