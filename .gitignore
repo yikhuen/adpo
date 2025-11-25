@@ -20,10 +20,12 @@ wandb/
 cache/
 .data/
 data/
+eval_results/
 outputs/
 checkpoints/
 *.pt
 *.bin
+*.jsonl
 *.csv
 
 # OS / editors
