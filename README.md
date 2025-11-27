@@ -7,6 +7,7 @@ Adaptive DPO is a research-grade framework for Direct Preference Optimisation wi
 ## Quick Start
 
 ```bash
+cd /workspace                   # standard project root on GPU clouds (RunPod, VastAI, etc.)
 git clone https://github.com/yikhuen/adpo.git
 cd adpo
 python -m venv .venv && source .venv/bin/activate
