@@ -1,14 +1,32 @@
 from __future__ import annotations
 
+import importlib
 import os
 import time
 from typing import Any, Dict, List, Optional, Protocol
 
-import openai
-import torch
-from transformers import AutoModelForCausalLM, AutoTokenizer
-
 DEFAULT_PROMPT_TEMPLATE = "Prompt:\n{prompt}\n\nResponse A:\n{a}\n\nResponse B:\n{b}\n\nWhich is better? Reply with only A or B."
+
+
+def _lazy_import_openai():
+    try:
+        return importlib.import_module("openai")
+    except ImportError as exc:  # pragma: no cover
+        raise RuntimeError("openai must be installed to use the OpenAI judge provider.") from exc
+
+
+def _lazy_import_transformers():
+    try:
+        return importlib.import_module("transformers")
+    except ImportError as exc:  # pragma: no cover
+        raise RuntimeError("transformers must be installed to use the hf_causal judge provider.") from exc
+
+
+def _lazy_import_torch():
+    try:
+        return importlib.import_module("torch")
+    except ImportError as exc:  # pragma: no cover
+        raise RuntimeError("PyTorch must be installed to use the hf_causal judge provider.") from exc
 
 
 class _JudgeBackend(Protocol):
@@ -20,7 +38,7 @@ class _OpenAIBackend:
     def __init__(
         self,
         *,
-        client: openai.OpenAI,
+        client,
         model_name: Optional[str],
         temperature: float,
         max_tokens: int,
@@ -75,6 +93,10 @@ class _GeminiBackend:
 
 class _HFCausalBackend:
     def __init__(self, *, model_name: str, temperature: float, max_tokens: int):
+        transformers = _lazy_import_transformers()
+        torch = _lazy_import_torch()
+        AutoTokenizer = transformers.AutoTokenizer
+        AutoModelForCausalLM = transformers.AutoModelForCausalLM
         self.tokenizer = AutoTokenizer.from_pretrained(
             model_name, use_fast=False, trust_remote_code=True
         )
@@ -114,6 +136,7 @@ class PairwiseJudge:
 
     def _build_backend(self, cfg: Dict[str, Any]) -> _JudgeBackend:
         if self.provider == "openai":
+            openai = _lazy_import_openai()
             api_key = cfg.get("api_key") or os.environ.get("OPENAI_API_KEY")
             if not api_key:
                 raise RuntimeError("OPENAI_API_KEY not set for OpenAI judge.")

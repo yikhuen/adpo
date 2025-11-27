@@ -5,6 +5,7 @@ import shutil
 import subprocess
 import sys
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -14,6 +15,14 @@ import yaml
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 RESULTS_ROOT = _REPO_ROOT / "research" / "results"
 CONFIG_CACHE = RESULTS_ROOT / "configs"
+
+
+@dataclass
+class PhaseTrainingJob:
+    label: str
+    config: Dict[str, Any]
+    output_dir: Path
+    config_filename: str
 
 
 def _slug(value: str) -> str:
@@ -30,6 +39,13 @@ def _write_config(config: Dict, filename: str) -> Path:
     with path.open("w", encoding="utf-8") as f:
         yaml.safe_dump(config, f, sort_keys=False)
     return path
+
+
+def _run_training_job(job: PhaseTrainingJob, artifact_dest: Path) -> Path:
+    config_path = _write_config(job.config, job.config_filename)
+    _run_training(config_path)
+    _collect_train_artifacts(str(_resolve_path(job.output_dir)), artifact_dest)
+    return config_path
 
 
 def _relativize(path: Path) -> str:
@@ -205,9 +221,13 @@ def run_phase1(
         cfg["seed"] = cfg.get("seed", 42)
         cfg["seeds"] = cfg.get("seeds", [cfg["seed"]])
 
-        config_path = _write_config(cfg, f"phase1_beta_{_slug(f'{beta:.3f}')}.yaml")
-        _run_training(config_path)
-        _collect_train_artifacts(str(_resolve_path(run_dir)), phase_dir / f"beta_{_slug(f'{beta:.3f}')}")
+        job = PhaseTrainingJob(
+            label=f"beta_{_slug(f'{beta:.3f}')}",
+            config=cfg,
+            output_dir=run_dir,
+            config_filename=f"phase1_beta_{_slug(f'{beta:.3f}')}.yaml",
+        )
+        _run_training_job(job, phase_dir / job.label)
 
 
 def run_phase2(
@@ -234,6 +254,7 @@ def run_phase2(
     run_outputs: Dict[str, Path] = {}
     config_map: Dict[str, Dict[str, Any]] = {}
 
+    training_jobs: List[PhaseTrainingJob] = []
     for label, path in configs:
         cfg = _load_yaml(path)
         trainer_cfg = cfg.setdefault("trainer", {})
@@ -246,15 +267,26 @@ def run_phase2(
             run_output = run_output / f"beta_{beta_slug}"
             trainer_cfg["output_dir"] = str(run_output)
             existing_name = trainer_cfg.get("run_name")
-            trainer_cfg["run_name"] = (existing_name + f"_beta_{beta_slug}") if existing_name else f"phase2_fixed_beta_{beta_slug}"
+            trainer_cfg["run_name"] = (
+                existing_name + f"_beta_{beta_slug}" if existing_name else f"phase2_fixed_beta_{beta_slug}"
+            )
 
         if len(cfg.get("seeds", [])) <= 1:
             cfg["seeds"] = cfg.get("seeds", [cfg.get("seed", 42)])
-        config_path = _write_config(cfg, f"phase2_{label}.yaml")
-        _run_training(config_path)
-        _collect_train_artifacts(str(_resolve_path(run_output)), phase_dir / f"train_{label}")
-        run_outputs[label] = _resolve_path(run_output)
-        config_map[label] = cfg
+
+        training_jobs.append(
+            PhaseTrainingJob(
+                label=label,
+                config=cfg,
+                output_dir=run_output,
+                config_filename=f"phase2_{label}.yaml",
+            )
+        )
+
+    for job in training_jobs:
+        _run_training_job(job, phase_dir / f"train_{job.label}")
+        run_outputs[job.label] = _resolve_path(job.output_dir)
+        config_map[job.label] = job.config
 
     typer.echo("[orchestrate] Running evaluation for Phase 2")
     eval_output_dir = phase_dir / "evaluation"
@@ -341,9 +373,13 @@ def run_phase3(
         cfg["seed"] = cfg.get("seed", 42)
         cfg["seeds"] = cfg.get("seeds", [cfg["seed"]])
 
-        config_path = _write_config(cfg, f"phase3_{label}.yaml")
-        _run_training(config_path)
-        _collect_train_artifacts(str(_resolve_path(run_output)), phase_dir / f"ablation_{label}")
+        job = PhaseTrainingJob(
+            label=f"ablation_{label}",
+            config=cfg,
+            output_dir=run_output,
+            config_filename=f"phase3_{label}.yaml",
+        )
+        _run_training_job(job, phase_dir / job.label)
 
 
 def run_phase4(

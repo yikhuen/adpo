@@ -4,7 +4,6 @@ from pathlib import Path
 
 import typer
 import yaml
-import unsloth  # noqa: F401
 
 from adaptive_dpo.pipelines.train import run_training
 

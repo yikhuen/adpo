@@ -2,8 +2,13 @@ from typing import Any, Dict, Optional, List, Tuple
 
 import logging
 import math
+from typing import cast
+
 import torch
-from trl import DPOTrainer
+import torch.nn as nn
+import torch.nn.functional as F
+from trl.trainer.dpo_trainer import DPOTrainer
+from trl.trainer.utils import flush_left, flush_right, pad_to_length, selective_log_softmax
 
 logger = logging.getLogger(__name__)
 
@@ -71,6 +76,8 @@ class LoggingDPOTrainer(DPOTrainer):
         self._kl_log_alpha = float(kl_log_alpha)
         self._kl_ema = 0.0
         self.phase_trace: List[Dict[str, Any]] = []
+        self._policy_forward_cache: Optional[Dict[str, torch.Tensor]] = None
+        self._ref_forward_cache: Optional[Dict[str, torch.Tensor]] = None
         super().__init__(*args, **kwargs)
 
     def set_fixed_beta_value(self, value: Optional[float]):
@@ -92,6 +99,224 @@ class LoggingDPOTrainer(DPOTrainer):
         if "input_ids" in batch:
             return batch["input_ids"], batch.get("attention_mask")
         return None, None
+
+    def _clear_forward_caches(self) -> None:
+        self._policy_forward_cache = None
+        self._ref_forward_cache = None
+
+    def concatenated_forward(
+        self, model: nn.Module, batch: dict[str, torch.Tensor], is_ref_model: bool = False
+    ) -> dict[str, torch.Tensor]:
+        num_examples = batch["prompt_input_ids"].shape[0]
+
+        concatenated_batch = self.concatenated_inputs(batch, padding_value=self.padding_value)
+
+        model_kwargs: Dict[str, Any] = {"use_cache": False}
+        if self.aux_loss_enabled:
+            model_kwargs["output_router_logits"] = True
+
+        if "pixel_values" in concatenated_batch:
+            model_kwargs["pixel_values"] = concatenated_batch["pixel_values"]
+        if "pixel_attention_mask" in concatenated_batch:
+            model_kwargs["pixel_attention_mask"] = concatenated_batch["pixel_attention_mask"]
+        if "image_sizes" in concatenated_batch:
+            model_kwargs["image_sizes"] = concatenated_batch["image_sizes"]
+
+        prompt_input_ids = concatenated_batch["prompt_input_ids"]
+        prompt_attention_mask = concatenated_batch["prompt_attention_mask"]
+        completion_input_ids = concatenated_batch["completion_input_ids"]
+        completion_attention_mask = concatenated_batch["completion_attention_mask"]
+
+        if self.is_encoder_decoder:
+            labels = completion_input_ids.clone()
+            labels[completion_attention_mask == 0] = self.label_pad_token_id
+            outputs = model(
+                input_ids=prompt_input_ids,
+                attention_mask=prompt_attention_mask,
+                labels=labels,
+                **model_kwargs,
+            )
+            logits = outputs.logits
+            loss_mask = completion_attention_mask.bool()
+            attention_mask = prompt_attention_mask
+            input_ids = completion_input_ids
+        else:
+            input_ids = torch.cat((prompt_input_ids, completion_input_ids), dim=1)
+            attention_mask = torch.cat((prompt_attention_mask, completion_attention_mask), dim=1)
+            loss_mask = torch.cat(
+                (torch.zeros_like(prompt_attention_mask), completion_attention_mask),
+                dim=1,
+            )
+
+            if self.max_length is not None and self.max_length < attention_mask.size(1):
+                if self.truncation_mode == "keep_start":
+                    attention_mask, input_ids, loss_mask = flush_left(attention_mask, input_ids, loss_mask)
+                    attention_mask = attention_mask[:, : self.max_length]
+                    input_ids = input_ids[:, : self.max_length]
+                    loss_mask = loss_mask[:, : self.max_length]
+                elif self.truncation_mode == "keep_end":
+                    attention_mask, input_ids, loss_mask = flush_right(attention_mask, input_ids, loss_mask)
+                    input_ids = input_ids[:, -self.max_length :]
+                    attention_mask = attention_mask[:, -self.max_length :]
+                    loss_mask = loss_mask[:, -self.max_length :]
+                    attention_mask, input_ids, loss_mask = flush_left(attention_mask, input_ids, loss_mask)
+                else:
+                    raise ValueError(
+                        f"Unknown truncation mode: '{self.truncation_mode}'. Should be one of ['keep_end', 'keep_start']."
+                    )
+            else:
+                attention_mask, input_ids, loss_mask = flush_left(attention_mask, input_ids, loss_mask)
+
+            if self.use_logits_to_keep:
+                first_compute_index = loss_mask.nonzero(as_tuple=True)[1].min()
+                logits_to_keep = (loss_mask.shape[1] - first_compute_index).item() + 1
+                model_kwargs["logits_to_keep"] = logits_to_keep
+
+            model_kwargs["output_hidden_states"] = True
+
+            if self.padding_free:
+                input_ids = input_ids[attention_mask.bool()].unsqueeze(0)
+                loss_mask = loss_mask[attention_mask.bool()].unsqueeze(0)
+                position_ids = attention_mask.cumsum(1)[attention_mask.bool()].unsqueeze(0) - 1
+                model_kwargs["position_ids"] = position_ids
+                attention_mask_for_logits = attention_mask
+            else:
+                model_kwargs["attention_mask"] = attention_mask
+                attention_mask_for_logits = attention_mask
+
+            outputs = model(input_ids, **model_kwargs)
+            logits = outputs.logits
+
+            labels = torch.roll(input_ids, shifts=-1, dims=1)
+            loss_mask = torch.roll(loss_mask, shifts=-1, dims=1).bool()
+
+            if self.use_logits_to_keep:
+                labels = labels[:, -logits_to_keep:]
+                loss_mask = loss_mask[:, -logits_to_keep:]
+
+            attention_mask = attention_mask_for_logits
+
+        if logits.shape[:2] != labels.shape[:2]:
+            seq_len = labels.shape[1]
+            logits = logits[:, -seq_len:]
+
+        labels[~loss_mask] = 0
+        per_token_logps = selective_log_softmax(logits, labels)
+        per_token_logps[~loss_mask] = 0
+        per_token_logps = torch.roll(per_token_logps, shifts=1, dims=1)
+
+        if self.padding_free:
+            batch_size, seq_len = attention_mask.shape
+            per_token_logps_ = torch.zeros(
+                batch_size, seq_len, device=outputs.logits.device, dtype=outputs.logits.dtype
+            )
+            per_token_logps_[attention_mask.bool()] = per_token_logps
+            per_token_logps = per_token_logps_
+
+        all_logps = per_token_logps[:, 1:].sum(-1)
+
+        output: Dict[str, torch.Tensor] = {}
+
+        if self.use_weighting:
+            with torch.no_grad():
+                logprobs = F.log_softmax(logits, dim=-1)
+                weights_adjustment_factor = torch.logsumexp(2 * logprobs, dim=-1)
+                per_token_logps_adjusted = per_token_logps - weights_adjustment_factor
+                all_weights = (per_token_logps_adjusted * loss_mask).sum(-1) / loss_mask.sum(-1)
+                chosen_weights = all_weights[:num_examples]
+                rejected_weights = all_weights[num_examples:]
+                output["policy_weights"] = torch.clamp(torch.exp(chosen_weights + rejected_weights), max=1)
+
+        if self.args.rpo_alpha is not None or "sft" in self.loss_type:
+            chosen_logits = logits[:num_examples, :-1] if not self.is_encoder_decoder else logits[:num_examples]
+            chosen_labels = labels[:num_examples, :-1] if not self.is_encoder_decoder else labels[:num_examples]
+            output["nll_loss"] = F.cross_entropy(
+                torch.flatten(chosen_logits, end_dim=1), torch.flatten(chosen_labels, end_dim=1), ignore_index=0
+            )
+
+        if "ipo" in self.loss_type:
+            all_logps = all_logps / loss_mask.sum(-1)
+
+        if self.args.ld_alpha is not None and not is_ref_model:
+            completion_lengths = loss_mask.sum(dim=1)
+            chosen_lengths = completion_lengths[:num_examples]
+            rejected_lengths = completion_lengths[num_examples:]
+            public_lengths = torch.min(chosen_lengths, rejected_lengths)
+            public_lengths = torch.cat([public_lengths, public_lengths], dim=0)
+
+            seq_len = per_token_logps.size(1)
+            position_ids = torch.arange(seq_len, device=per_token_logps.device).expand_as(per_token_logps)
+
+            ld_mask = position_ids < public_lengths.unsqueeze(1)
+            mask = position_ids < completion_lengths.unsqueeze(1)
+
+            front_mask = (ld_mask & mask).float()
+            rear_mask = (~ld_mask & mask).float()
+            front_logps = (per_token_logps * front_mask).sum(dim=1)
+            rear_logps = (per_token_logps * rear_mask).sum(dim=1)
+
+            all_logps = front_logps + self.args.ld_alpha * rear_logps
+
+        output["chosen_logps"] = all_logps[:num_examples]
+        output["rejected_logps"] = all_logps[num_examples:]
+
+        if self.padding_free:
+            split_idx = (attention_mask == 0).nonzero(as_tuple=True)[1][num_examples]
+            mean_chosen_logits = logits[0, :split_idx][loss_mask[0, :split_idx]].mean()
+            mean_rejected_logits = logits[0, split_idx:][loss_mask[0, split_idx:]].mean()
+        else:
+            mean_chosen_logits = logits[:num_examples][loss_mask[:num_examples]].mean()
+            mean_rejected_logits = logits[num_examples:][loss_mask[num_examples:]].mean()
+
+        output["mean_chosen_logits"] = mean_chosen_logits
+        output["mean_rejected_logits"] = mean_rejected_logits
+
+        if self.aux_loss_enabled:
+            output["aux_loss"] = outputs.aux_loss
+
+        cache_payload = {
+            "logits": logits.detach(),
+            "labels": labels.detach(),
+            "loss_mask": loss_mask.detach(),
+            "num_examples": torch.tensor(num_examples, device=logits.device),
+            "decode_ids": torch.cat((batch["prompt_input_ids"], batch["chosen_input_ids"]), dim=1).detach(),
+            "attention_mask": attention_mask.detach() if attention_mask is not None else None,
+        }
+        if not is_ref_model:
+            self._policy_forward_cache = cache_payload
+        else:
+            self._ref_forward_cache = cache_payload
+
+        return output
+
+    def _compute_kl_from_cache(
+        self,
+    ) -> Tuple[float, Optional[torch.Tensor], Optional[torch.Tensor], Optional[torch.Tensor]]:
+        if self._policy_forward_cache is None or self._ref_forward_cache is None:
+            raise ValueError("Forward caches are empty; cannot compute KL.")
+        policy_cache = self._policy_forward_cache
+        ref_cache = self._ref_forward_cache
+
+        num_examples = int(policy_cache["num_examples"].item()) if isinstance(
+            policy_cache["num_examples"], torch.Tensor
+        ) else int(policy_cache["num_examples"])
+
+        logits = policy_cache["logits"][:num_examples]
+        ref_logits = ref_cache["logits"][:num_examples]
+        labels = policy_cache["labels"][:num_examples]
+        mask = policy_cache["loss_mask"][:num_examples].float()
+
+        pol_lp = torch.log_softmax(logits.float(), dim=-1)
+        ref_lp = torch.log_softmax(ref_logits.float(), dim=-1)
+        tgt = labels.unsqueeze(-1)
+        pol_tok = pol_lp.gather(-1, tgt).squeeze(-1)
+        ref_tok = ref_lp.gather(-1, tgt).squeeze(-1)
+        diff = (pol_tok - ref_tok).clamp_min(0.0)
+        denom = mask.sum(dim=-1).clamp_min(1.0)
+        per_sample = (diff * mask).sum(dim=-1) / denom
+        kl_batch = per_sample.mean().item()
+        decode_ids = policy_cache["decode_ids"][:num_examples]
+        return kl_batch, logits.detach(), per_sample.detach(), decode_ids.detach()
 
     @torch.no_grad()
     def _kl_per_token_on_prompt(self, batch) -> float:
@@ -212,13 +437,28 @@ class LoggingDPOTrainer(DPOTrainer):
 
     def compute_loss(self, model, inputs, return_outputs=False, **kwargs):
         kl_override = kwargs.pop("_kl_override", None)
-        policy_logits = None
+        self._clear_forward_caches()
+        loss, metrics = self.get_batch_loss_metrics(model, inputs, train_eval="train")
+        loss = loss.to(self.args.device)
+        self.store_metrics(metrics, train_eval="train")
+
         if kl_override is not None:
             kl_batch = float(kl_override)
+            policy_logits = None
+            per_sample_kl = None
+            decode_ids = None
         else:
-            kl_batch, policy_logits, _, _, _ = self._kl_with_policy_logits(inputs)
-        loss = super().compute_loss(model, inputs, return_outputs=return_outputs, **kwargs)
+            try:
+                kl_batch, policy_logits, per_sample_kl, decode_ids = self._compute_kl_from_cache()
+            except ValueError:
+                kl_batch, policy_logits, _, _, decode_ids = self._kl_with_policy_logits(inputs)
+                per_sample_kl = None
+
         self._log_metrics(kl_batch, policy_logits=policy_logits)
+        self._log_high_kl_samples(decode_ids, per_sample_kl)
+
+        if return_outputs:
+            return loss, metrics
         return loss
 
 
@@ -229,10 +469,31 @@ class AdaptiveDPOTrainer(LoggingDPOTrainer):
         self.beta_controller = beta_controller
 
     def compute_loss(self, model, inputs, return_outputs=False, **kwargs):
-        # Update beta from KL estimate
+        kl_override = kwargs.pop("_kl_override", None)
+        self._clear_forward_caches()
+        loss, metrics = self.get_batch_loss_metrics(model, inputs, train_eval="train")
+        loss = loss.to(self.args.device)
+        self.store_metrics(metrics, train_eval="train")
+
         requires_entropy = getattr(self.beta_controller, "requires_entropy", False)
-        kl_batch, policy_logits, attention_mask, per_sample_kl, input_ids = self._kl_with_policy_logits(inputs)
-        if requires_entropy and policy_logits is not None:
+
+        if kl_override is not None:
+            kl_batch = float(kl_override)
+            policy_logits = None
+            per_sample_kl = None
+            decode_ids = None
+        else:
+            try:
+                kl_batch, policy_logits, per_sample_kl, decode_ids = self._compute_kl_from_cache()
+            except ValueError:
+                kl_batch, policy_logits, _, _, decode_ids = self._kl_with_policy_logits(inputs)
+                per_sample_kl = None
+
+        attention_mask = None
+        if self._policy_forward_cache is not None:
+            attention_mask = self._policy_forward_cache.get("attention_mask")
+
+        if requires_entropy and policy_logits is not None and attention_mask is not None:
             beta = self.beta_controller.update(
                 kl_batch,
                 batch_logits=policy_logits,
@@ -241,14 +502,15 @@ class AdaptiveDPOTrainer(LoggingDPOTrainer):
             )
         else:
             beta = self.beta_controller.update(kl_batch)
+
         old_beta = getattr(self, "beta", None)
         self.beta = beta
-        loss = DPOTrainer.compute_loss(self, model, inputs, return_outputs=return_outputs, **kwargs)
+        loss_to_return = (loss, metrics) if return_outputs else loss
         self.beta = old_beta
         controller_state = self.beta_controller.state() if self.is_world_process_zero() else None
         self._log_metrics(kl_batch, controller_state=controller_state, policy_logits=policy_logits)
-        self._log_high_kl_samples(input_ids, per_sample_kl)
-        return loss
+        self._log_high_kl_samples(decode_ids, per_sample_kl)
+        return loss_to_return
 
     def _log_high_kl_samples(
         self,
