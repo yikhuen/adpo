@@ -8,8 +8,6 @@ import openai
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
-from .utils import progress
-
 DEFAULT_PROMPT_TEMPLATE = "Prompt:\n{prompt}\n\nResponse A:\n{a}\n\nResponse B:\n{b}\n\nWhich is better? Reply with only A or B."
 
 

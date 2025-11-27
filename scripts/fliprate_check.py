@@ -371,7 +371,6 @@ def auto_download_dataset(dest: Path, samples: int, seed: int) -> Path:
     dest.parent.mkdir(parents=True, exist_ok=True)
     dest.write_text(json.dumps(rows, indent=2))
     return dest
-    return parser.parse_args()
 
 
 def compute_entropy(prompt: str, model: str, client: OpenAI) -> float:
@@ -512,7 +511,6 @@ def main() -> None:
 
     if records and args.plot:
         args.plot.parent.mkdir(parents=True, exist_ok=True)
-        df_records = pd.DataFrame(records)
         order = ["low", "medium", "high"]
         df_summary = pd.DataFrame(
             [{"bucket": bucket, **summary[bucket]} for bucket in order if bucket in summary]

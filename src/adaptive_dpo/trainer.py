@@ -3,7 +3,6 @@ from typing import Any, Dict, Optional, List, Tuple
 import math
 import sys
 import torch
-import torch.nn.functional as F
 from trl import DPOTrainer
 
 

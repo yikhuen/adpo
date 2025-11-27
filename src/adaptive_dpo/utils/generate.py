@@ -1,6 +1,5 @@
-from typing import List, Optional
+from typing import List
 import torch
-from transformers import TextStreamer
 from unsloth import FastLanguageModel
 
 

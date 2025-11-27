@@ -22,7 +22,7 @@ import argparse
 import json
 import math
 from pathlib import Path
-from typing import Iterable, List, Sequence, Tuple
+from typing import List, Sequence, Tuple
 
 import pandas as pd
 import torch

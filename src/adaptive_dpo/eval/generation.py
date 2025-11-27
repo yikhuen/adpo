@@ -1,9 +1,8 @@
 from __future__ import annotations
 
 import json
-import os
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Tuple
 
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
@@ -104,7 +103,7 @@ def ensure_responses(
         prompt_id = prompt_obj.get("id", fallback_idx)
         return str(prompt_id)
 
-    records_by_id = _load_cache(cache_path) if not force else {}
+    records_by_id: Dict[str, Dict[str, Any]] = _load_cache(cache_path) if not force else {}
 
     missing_prompts: List[Tuple[int, Dict[str, Any]]] = []
     for idx, prompt_obj in enumerate(prompts):
