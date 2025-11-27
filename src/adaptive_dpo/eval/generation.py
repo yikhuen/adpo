@@ -5,7 +5,16 @@ import json
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-import torch
+try:  # pragma: no cover - optional dependency for tests
+    import torch
+except Exception:  # pragma: no cover - fall back to mocks
+    torch = None  # type: ignore[assignment]
+
+try:  # pragma: no cover - optional dependency for tests
+    from transformers import AutoModelForCausalLM, AutoTokenizer
+except Exception:  # pragma: no cover - fall back to mocks
+    AutoModelForCausalLM = None  # type: ignore[assignment]
+    AutoTokenizer = None  # type: ignore[assignment]
 
 FastLanguageModel = None
 _UNSLOTH_IMPORT_ERROR: Optional[Exception] = None
@@ -16,8 +25,6 @@ except Exception as exc:  # pragma: no cover - best effort on CPU CI
     _UNSLOTH_IMPORT_ERROR = exc
 else:
     FastLanguageModel = _FastLanguageModel  # type: ignore
-
-from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from adaptive_dpo.modeling import load_qwen25_7b_base
 from adaptive_dpo.utils.generate import generate_batch
@@ -32,6 +39,22 @@ def _require_unsloth() -> None:
             "Unsloth is unavailable in this environment. "
             "GPU-backed installations are required when loading LoRA models."
         ) from _UNSLOTH_IMPORT_ERROR
+
+
+def _require_torch():
+    if torch is None:
+        raise ModuleNotFoundError(
+            "PyTorch is required for HF model loading. Install the CPU build for tests or enable GPU support."
+        )
+    return torch
+
+
+def _require_transformers():
+    if AutoModelForCausalLM is None or AutoTokenizer is None:
+        raise ModuleNotFoundError(
+            "transformers is required for HF model loading. Install the library to use 'hf' generation entries."
+        )
+    return AutoModelForCausalLM, AutoTokenizer
 
 
 def load_lora_model(ckpt_dir: str, max_seq_length: int = 4096, load_in_4bit: bool = True):
@@ -71,12 +94,14 @@ def load_model_entry(name: str, entry: Dict[str, Any]):
             raise ValueError(f"Model '{name}' of kind 'lora' requires a 'checkpoint' path.")
         model, tokenizer = load_lora_model(ckpt_dir, max_seq_length=max_seq_length, load_in_4bit=load_in_4bit)
     elif kind == "hf":
+        torch_mod = _require_torch()
+        AutoModelCls, AutoTokenizerCls = _require_transformers()
         model_id = entry.get("model")
         if not model_id:
             raise ValueError(f"Model '{name}' of kind 'hf' requires a 'model' identifier.")
-        tokenizer = AutoTokenizer.from_pretrained(model_id, use_fast=False, trust_remote_code=True)
-        dtype = torch.float16 if torch.cuda.is_available() else None
-        model = AutoModelForCausalLM.from_pretrained(
+        tokenizer = AutoTokenizerCls.from_pretrained(model_id, use_fast=False, trust_remote_code=True)
+        dtype = torch_mod.float16 if torch_mod.cuda.is_available() else None
+        model = AutoModelCls.from_pretrained(
             model_id,
             device_map="auto",
             torch_dtype=dtype,

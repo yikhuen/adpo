@@ -1,5 +1,9 @@
 from typing import List, Optional
-import torch
+
+try:  # pragma: no cover - optional dependency for tests
+    import torch
+except Exception:  # pragma: no cover - best effort on CPU CI
+    torch = None  # type: ignore[assignment]
 
 FastLanguageModel = None
 _UNSLOTH_IMPORT_ERROR: Optional[Exception] = None
@@ -20,6 +24,14 @@ def _require_unsloth() -> None:
         ) from _UNSLOTH_IMPORT_ERROR
 
 
+def _require_torch():
+    if torch is None:
+        raise ModuleNotFoundError(
+            "PyTorch is required for text generation helpers. Install the CPU build to enable this utility."
+        )
+    return torch
+
+
 def load_base_qwen(max_seq_length: int = 4096, load_in_4bit: bool = True, dtype=None):
     _require_unsloth()
     model, tokenizer = FastLanguageModel.from_pretrained(  # type: ignore[operator]
@@ -33,9 +45,10 @@ def load_base_qwen(max_seq_length: int = 4096, load_in_4bit: bool = True, dtype=
 
 def generate_batch(model, tokenizer, prompts: List[str], max_new_tokens: int = 512):
     _require_unsloth()
+    torch_mod = _require_torch()
     model.eval()
     inputs = tokenizer(prompts, return_tensors="pt", padding=True, truncation=True).to(model.device)
-    with torch.no_grad():
+    with torch_mod.no_grad():
         outputs = model.generate(
             **inputs,
             do_sample=False,
