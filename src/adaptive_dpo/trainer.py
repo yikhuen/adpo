@@ -1,6 +1,7 @@
 from typing import Any, Dict, Optional, List, Tuple
 
 import math
+import sys
 import torch
 import torch.nn.functional as F
 from trl import DPOTrainer
@@ -190,14 +191,14 @@ class LoggingDPOTrainer(DPOTrainer):
 
         try:
             self.log(log_dict)
-        except Exception:
-            pass
+        except Exception as exc:
+            print(f"[adaptive-dpo] Warning: Trainer.log failed: {exc}", file=sys.stderr)
         accelerator = getattr(self, "accelerator", None)
         if accelerator is not None:
             try:
                 accelerator.log(log_dict, step=self.state.global_step)
-            except Exception:
-                pass
+            except Exception as exc:
+                print(f"[adaptive-dpo] Warning: Accelerator.log failed: {exc}", file=sys.stderr)
 
         if self.is_world_process_zero():
             snapshot = {

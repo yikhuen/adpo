@@ -1,10 +1,9 @@
-import os
 import shutil
 import subprocess
 import sys
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import typer
 import yaml
@@ -31,6 +30,98 @@ def _write_config(config: Dict, filename: str) -> Path:
     with path.open("w", encoding="utf-8") as f:
         yaml.safe_dump(config, f, sort_keys=False)
     return path
+
+
+def _relativize(path: Path) -> str:
+    try:
+        return str(path.relative_to(_REPO_ROOT))
+    except ValueError:
+        return str(path)
+
+
+def _parse_dataset_spec(spec: str) -> Tuple[str, str]:
+    if "=" not in spec:
+        raise typer.BadParameter(
+            f"Dataset spec '{spec}' must be in the form name=path/to/prompts.jsonl."
+        )
+    label, path_value = (part.strip() for part in spec.split("=", 1))
+    if not label:
+        raise typer.BadParameter(f"Dataset spec '{spec}' is missing a name before '='.")
+    if not path_value:
+        raise typer.BadParameter(f"Dataset spec '{spec}' is missing a path after '='.")
+    resolved = _resolve_path(Path(path_value))
+    if not resolved.exists():
+        raise typer.BadParameter(f"Dataset prompt file '{resolved}' does not exist.")
+    return label, _relativize(resolved)
+
+
+def _parse_model_spec(spec: str) -> Tuple[str, Dict[str, Any]]:
+    if "=" not in spec:
+        raise typer.BadParameter(
+            f"Model spec '{spec}' must be in the form name=kind:lora,checkpoint:path"
+        )
+    label, payload = (part.strip() for part in spec.split("=", 1))
+    if not label or not payload:
+        raise typer.BadParameter(f"Malformed model spec '{spec}'.")
+
+    entry: Dict[str, Any] = {}
+    segments = [segment.strip() for segment in payload.split(",") if segment.strip()]
+    if not segments:
+        raise typer.BadParameter(f"Model spec '{spec}' must define at least one key/value pair.")
+
+    default_kind = "lora"
+    if len(segments) == 1 and ":" not in segments[0]:
+        entry["kind"] = default_kind
+        entry["checkpoint"] = segments[0]
+    else:
+        for segment in segments:
+            if ":" not in segment:
+                raise typer.BadParameter(
+                    f"Model spec segment '{segment}' must be key:value (from '{spec}')."
+                )
+            key, value = (part.strip() for part in segment.split(":", 1))
+            if not key:
+                raise typer.BadParameter(f"Model spec '{spec}' has an empty key.")
+            if not value:
+                raise typer.BadParameter(f"Model spec '{spec}' missing value for key '{key}'.")
+            entry[key] = value
+        entry.setdefault("kind", default_kind)
+
+    kind = entry.get("kind")
+    if kind == "lora":
+        if "checkpoint" not in entry:
+            raise typer.BadParameter(f"Model '{label}' of kind 'lora' requires 'checkpoint'.")
+    elif kind == "hf":
+        if "model" not in entry:
+            raise typer.BadParameter(f"Model '{label}' of kind 'hf' requires 'model'.")
+    elif kind == "base":
+        # Base models optionally supply identifier
+        pass
+    else:
+        raise typer.BadParameter(
+            f"Unsupported model kind '{kind}' for '{label}'. Expected one of lora, hf, base."
+        )
+    return label, entry
+
+
+def _validate_comparisons_models(cfg: Dict[str, Any]) -> None:
+    models = cfg.get("models") or {}
+    if not models:
+        raise typer.BadParameter("Evaluation config must define at least one model.")
+    model_names = set(models.keys())
+    missing: List[str] = []
+    for comparison in cfg.get("comparisons", []):
+        comp_name = comparison.get("name", "comparison")
+        for side in ("a", "b"):
+            model_ref = comparison.get(side)
+            if model_ref not in model_names:
+                missing.append(f"{comp_name}:{side} -> '{model_ref}'")
+    if missing:
+        missing_list = ", ".join(missing)
+        raise typer.BadParameter(
+            f"Comparison references undefined models: {missing_list}. "
+            "Ensure --model specs include every referenced model."
+        )
 
 
 def _run_training(config_path: Path) -> None:
@@ -298,25 +389,77 @@ def phase3(
 
 @app.command()
 def phase4(
-    eval_config: Path = typer.Option(..., help="Evaluation config covering generalization datasets."),
-    force_eval: bool = typer.Option(False, help="Force re-run evaluation even if cached."),
+    eval_config: Path = typer.Option(..., help="Base evaluation config to clone per dataset."),
+    datasets: List[str] = typer.Option(
+        ...,
+        "--dataset",
+        "-d",
+        help="Dataset spec 'name=path/to/prompts.jsonl'. Repeat per dataset.",
+    ),
+    models: List[str] = typer.Option(
+        [],
+        "--model",
+        "-m",
+        help="Model spec 'name=kind:lora,checkpoint:path'. Overrides config models when provided.",
+    ),
+    force_eval: bool = typer.Option(False, help="Force re-run judges even if cached decisions exist."),
 ):
-    """Run Phase 4 generalization evaluation only (models assumed trained)."""
+    """Run Phase 4 generalization sweep across dataset/model combinations."""
+    base_cfg = _load_yaml(eval_config)
     phase_dir = _phase_output_dir("phase4_generalization")
-    eval_output_dir = phase_dir / "evaluation"
-    eval_output_dir.mkdir(parents=True, exist_ok=True)
-    cmd = [
-        sys.executable,
-        "scripts/eval.py",
-        "--config",
-        str(eval_config),
-    ]
-    if force_eval:
-        cmd.append("--force-judge")
-    subprocess.run(cmd, check=True, cwd=_REPO_ROOT)
-    metrics_dir = _REPO_ROOT / "research" / "results" / "eval" / "metrics"
-    if metrics_dir.exists():
-        shutil.copytree(metrics_dir, eval_output_dir / "metrics", dirs_exist_ok=True)
+
+    dataset_specs = [_parse_dataset_spec(spec) for spec in datasets]
+    if not dataset_specs:
+        raise typer.BadParameter("At least one --dataset entry is required for Phase 4.")
+
+    if models:
+        model_map = {}
+        for spec in models:
+            label, entry = _parse_model_spec(spec)
+            model_map[label] = entry
+    else:
+        model_map = base_cfg.get("models") or {}
+
+    if not model_map:
+        raise typer.BadParameter(
+            "No models defined. Provide --model entries or ensure the base eval config defines models."
+        )
+
+    for dataset_label, dataset_path in dataset_specs:
+        cfg = yaml.safe_load(yaml.dump(base_cfg))
+        cfg["models"] = yaml.safe_load(yaml.dump(model_map))
+        prompts_cfg = cfg.setdefault("prompts", {})
+        prompts_cfg["path"] = dataset_path
+
+        dataset_slug = _slug(dataset_label)
+        dataset_phase_dir = phase_dir / dataset_slug
+        dataset_phase_dir.mkdir(parents=True, exist_ok=True)
+        eval_output_dir = dataset_phase_dir / "evaluation"
+        cfg.setdefault("output", {})
+        cfg["output"]["dir"] = str(eval_output_dir)
+
+        _validate_comparisons_models(cfg)
+
+        config_path = _write_config(cfg, f"phase4_{dataset_slug}.yaml")
+        typer.echo(
+            f"[orchestrate] Phase 4 evaluation for dataset '{dataset_label}' "
+            f"-> config {config_path}"
+        )
+
+        cmd = [
+            sys.executable,
+            "scripts/eval.py",
+            "--config",
+            str(config_path),
+        ]
+        if force_eval:
+            cmd.append("--force-judge")
+        subprocess.run(cmd, check=True, cwd=_REPO_ROOT)
+
+        metrics_dir = eval_output_dir / "metrics"
+        if metrics_dir.exists():
+            dest_metrics = dataset_phase_dir / "metrics"
+            shutil.copytree(metrics_dir, dest_metrics, dirs_exist_ok=True)
 
 
 if __name__ == "__main__":

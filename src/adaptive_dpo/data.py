@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
+import re
+
 from datasets import Dataset, DatasetDict, load_dataset
 
 # ---------------------------------------------------------------------------
@@ -76,19 +78,32 @@ def _format_ultrafeedback(example: Dict[str, Any], tokenizer, format_kwargs: Opt
 # ---------------------------------------------------------------------------
 
 
+_HH_TURN_PATTERN = re.compile(r"(human|assistant):", re.IGNORECASE)
+
+
 def _parse_hh_conversation(text: str) -> List[Dict[str, str]]:
     """Return list of chat messages derived from Anthropic HH conversation string."""
     normalized = text.replace("\r\n", "\n").strip()
     if not normalized:
         return []
-    chunks = [chunk for chunk in normalized.split("\n\n") if chunk.strip()]
+
+    matches = list(_HH_TURN_PATTERN.finditer(normalized))
+    if len(matches) < 2:
+        raise ValueError("Anthropic HH example must contain at least two labeled turns.")
+
     messages: List[Dict[str, str]] = []
-    for chunk in chunks:
-        chunk = chunk.strip()
-        if chunk.lower().startswith("human:"):
-            messages.append({"role": "user", "content": chunk.split(":", 1)[1].strip()})
-        elif chunk.lower().startswith("assistant:"):
-            messages.append({"role": "assistant", "content": chunk.split(":", 1)[1].strip()})
+    for idx, match in enumerate(matches):
+        role_token = match.group(1).lower()
+        role = "user" if role_token == "human" else "assistant"
+        start = match.end()
+        end = matches[idx + 1].start() if idx + 1 < len(matches) else len(normalized)
+        content = normalized[start:end].strip()
+        if not content:
+            continue
+        messages.append({"role": role, "content": content})
+
+    if not messages:
+        raise ValueError("Anthropic HH example could not be parsed into role-labeled messages.")
     return messages
 
 

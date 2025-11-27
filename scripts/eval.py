@@ -256,48 +256,89 @@ def ensure_responses(
     responses_dir.mkdir(parents=True, exist_ok=True)
     cache_path = responses_dir / f"{name}.jsonl"
 
-    if cache_path.exists() and not force:
+    def _prompt_key(prompt_obj: Dict[str, Any], fallback_idx: int) -> str:
+        prompt_id = prompt_obj.get("id", fallback_idx)
+        return str(prompt_id)
+
+    records_by_id: Dict[str, Dict[str, Any]] = {}
+    cache_loaded = cache_path.exists() and not force
+    if cache_loaded:
+        with cache_path.open("r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    record = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                record_id = record.get("id")
+                key = str(record_id)
+                records_by_id[key] = record
+
+    missing_prompts: List[Tuple[int, Dict[str, Any]]] = []
+    for idx, prompt_obj in enumerate(prompts):
+        key = _prompt_key(prompt_obj, idx)
+        if key not in records_by_id:
+            missing_prompts.append((idx, prompt_obj))
+
+    if cache_loaded and not missing_prompts:
         typer.echo(
             f"[eval] Using cached responses for model '{name}'. "
             "Run with --force-generate or delete the cache to regenerate."
         )
-        with cache_path.open("r", encoding="utf-8") as f:
-            return [json.loads(line) for line in f]
+        return [records_by_id[_prompt_key(prompt_obj, idx)] for idx, prompt_obj in enumerate(prompts)]
 
-    batch_size = int(generation_cfg.get("batch_size", 8))
-    max_new_tokens = int(generation_cfg.get("max_new_tokens", 256))
+    if cache_loaded and missing_prompts:
+        typer.echo(
+            f"[eval] Resuming cached responses for model '{name}' "
+            f"({len(missing_prompts)} missing of {len(prompts)} prompts)."
+        )
 
-    model, tokenizer = load_model_entry(name, entry)
+    if missing_prompts:
+        batch_size = int(generation_cfg.get("batch_size", 8))
+        max_new_tokens = int(generation_cfg.get("max_new_tokens", 256))
 
-    prompt_texts = [p["prompt"] for p in prompts]
-    outputs: List[str] = []
-    total_batches = max(1, (len(prompt_texts) + batch_size - 1) // batch_size)
-    batch_iter = _progress(
-        range(0, len(prompt_texts), batch_size),
-        total=total_batches,
-        desc=f"{name} generation",
-    )
-    for i in batch_iter:
-        chunk = prompt_texts[i : i + batch_size]
-        batch_outputs = generate_batch(model, tokenizer, chunk, max_new_tokens=max_new_tokens)
-        for prompt_text, full_text in zip(chunk, batch_outputs):
-            outputs.append(strip_prompt(prompt_text, full_text))
+        model, tokenizer = load_model_entry(name, entry)
 
-    records = []
-    for idx, (prompt_obj, response_text) in enumerate(zip(prompts, outputs)):
-        records.append(
-            {
+        prompt_texts = [prompt_obj["prompt"] for _, prompt_obj in missing_prompts]
+        generated_texts: List[str] = []
+        total_batches = max(1, (len(prompt_texts) + batch_size - 1) // batch_size)
+        batch_iter = _progress(
+            range(0, len(prompt_texts), batch_size),
+            total=total_batches,
+            desc=f"{name} generation",
+        )
+        for i in batch_iter:
+            chunk = prompt_texts[i : i + batch_size]
+            batch_outputs = generate_batch(model, tokenizer, chunk, max_new_tokens=max_new_tokens)
+            for prompt_text, full_text in zip(chunk, batch_outputs):
+                generated_texts.append(strip_prompt(prompt_text, full_text))
+
+        for (idx, prompt_obj), response_text in zip(missing_prompts, generated_texts):
+            key = _prompt_key(prompt_obj, idx)
+            records_by_id[key] = {
                 "id": prompt_obj.get("id", idx),
                 "prompt": prompt_obj["prompt"],
                 "response": response_text,
             }
-        )
+
+    ordered_records: List[Dict[str, Any]] = []
+    for idx, prompt_obj in enumerate(prompts):
+        key = _prompt_key(prompt_obj, idx)
+        record = records_by_id.get(key)
+        if record is None:
+            raise ValueError(
+                f"Missing response for prompt id '{key}' after generation. "
+                f"Delete cache at {cache_path} and retry."
+            )
+        ordered_records.append(record)
 
     with cache_path.open("w", encoding="utf-8") as f:
-        for record in records:
+        for record in ordered_records:
             f.write(json.dumps(record, ensure_ascii=False) + "\n")
 
-    return records
+    return ordered_records
 
 
 class PairwiseJudge:
