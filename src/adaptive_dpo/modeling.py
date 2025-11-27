@@ -30,23 +30,21 @@ def load_qwen25_7b_base(max_seq_length: int = 4096, load_in_4bit: bool = True, d
     return model, tokenizer
 
 
-_QWEN_LORA_TARGET_MODULES = [
-    "q_proj",
-    "k_proj",
-    "v_proj",
-    "o_proj",
-    "gate_proj",
-    "up_proj",
-    "down_proj",
-]
-
-
-def configure_qwen25_7b_lora(model) -> object:
+def load_qwen25_7b(max_seq_length: int = 4096, load_in_4bit: bool = True, dtype=None) -> Tuple[object, object]:
     _require_unsloth()
-    return FastLanguageModel.get_peft_model(  # type: ignore[call-arg]
+    model, tokenizer = load_qwen25_7b_base(max_seq_length=max_seq_length, load_in_4bit=load_in_4bit, dtype=dtype)
+    model = FastLanguageModel.get_peft_model(  # type: ignore[call-arg]
         model,
         r=64,
-        target_modules=_QWEN_LORA_TARGET_MODULES,
+        target_modules=[
+            "q_proj",
+            "k_proj",
+            "v_proj",
+            "o_proj",
+            "gate_proj",
+            "up_proj",
+            "down_proj",
+        ],
         lora_alpha=64,
         lora_dropout=0,
         bias="none",
@@ -55,9 +53,4 @@ def configure_qwen25_7b_lora(model) -> object:
         use_rslora=False,
         loftq_config=None,
     )
-
-
-def load_qwen25_7b(max_seq_length: int = 4096, load_in_4bit: bool = True, dtype=None) -> Tuple[object, object]:
-    model, tokenizer = load_qwen25_7b_base(max_seq_length=max_seq_length, load_in_4bit=load_in_4bit, dtype=dtype)
-    model = configure_qwen25_7b_lora(model)
     return model, tokenizer
