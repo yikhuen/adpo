@@ -20,3 +20,6 @@ dev = ["pytest", "ruff"]
 where = ["src"]
 include = ["adaptive_dpo*"]
 
+[tool.setuptools.package-dir]
+"" = "src"
+

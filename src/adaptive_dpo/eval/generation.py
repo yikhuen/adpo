@@ -2,20 +2,39 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import torch
+
+FastLanguageModel = None
+_UNSLOTH_IMPORT_ERROR: Optional[Exception] = None
+
+try:  # pragma: no cover - optional GPU dependency
+    from unsloth import FastLanguageModel as _FastLanguageModel  # type: ignore
+except Exception as exc:  # pragma: no cover - best effort on CPU CI
+    _UNSLOTH_IMPORT_ERROR = exc
+else:
+    FastLanguageModel = _FastLanguageModel  # type: ignore
+
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from adaptive_dpo.modeling import load_qwen25_7b_base
 from adaptive_dpo.utils.generate import generate_batch
-from unsloth import FastLanguageModel
 
 from .prompts import strip_prompt
 from .utils import progress
 
 
+def _require_unsloth() -> None:
+    if FastLanguageModel is None:
+        raise RuntimeError(
+            "Unsloth is unavailable in this environment. "
+            "GPU-backed installations are required when loading LoRA models."
+        ) from _UNSLOTH_IMPORT_ERROR
+
+
 def load_lora_model(ckpt_dir: str, max_seq_length: int = 4096, load_in_4bit: bool = True):
+    _require_unsloth()
     ckpt_path = Path(ckpt_dir)
     adapter_path = ckpt_path / "adapter_model.safetensors"
     if not adapter_path.exists():
@@ -25,7 +44,7 @@ def load_lora_model(ckpt_dir: str, max_seq_length: int = 4096, load_in_4bit: boo
         )
 
     try:
-        model, tokenizer = FastLanguageModel.from_pretrained(
+        model, tokenizer = FastLanguageModel.from_pretrained(  # type: ignore[operator]
             model_name=str(ckpt_path),
             max_seq_length=max_seq_length,
             dtype=None,
