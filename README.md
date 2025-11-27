@@ -182,6 +182,20 @@ The GitHub Actions workflow (`.github/workflows/ci.yml`) runs lint + pytest on e
 
 The previous README sections on RunPod provisioning, tmux usage, environment copying, and SCP backups were moved to [`docs/runpod.md`](docs/runpod.md). Refer there if you need the detailed GPU setup guide.
 
+### Environment Sync Cheatsheet
+
+- **Copy .env to a remote GPU:**
+  ```bash
+  scp .env user@remote-host:~/runs/adaptive_dpo/.env
+  ```
+- **Load env vars inside tmux/shell on the GPU:**
+  ```bash
+  cd ~/runs/adaptive_dpo
+  python -m venv .venv && source .venv/bin/activate
+  export $(grep -v '^#' .env | xargs)  # or use direnv
+  ```
+- **Persist env vars across sessions:** append the exports to `~/.bashrc` or use a secret manager (AWS/GCP/RunPod env panel) so that orchestrated runs inherit the keys automatically.
+
 ---
 
 ## License
