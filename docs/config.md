@@ -105,6 +105,7 @@ Highlights:
 - `comparisons`: `a`/`b` must reference names from `models`.
 - `judges.provider`: `openai`, `gemini`, or `hf_causal`.
 - `generation.cache`: disable to force regeneration per run.
+- [`configs/eval/judge_phase1.yaml`](../configs/eval/judge_phase1.yaml) is a minimal template (candidate vs base) used by the Phase 1 + Phase 3 orchestration flows; the model slot named `candidate` is overwritten with every checkpoint before calling `scripts/eval.py all-judges ...`.
 
 ---
 
@@ -126,6 +127,11 @@ python scripts/orchestrate.py phase4 \
 - Model spec: `name=kind:lora,checkpoint:path` (additional `key:value` pairs allowed)
 
 Validation happens before launching evaluations; missing models/datasets raise `typer.BadParameter`.
+
+- `phase1` adds knobs such as `--eval-config`, `--selection-comparison`, `--selection-judge`, `--results-path`, and `--run-eval/--skip-eval` to automate β selection.
+- `phase2` exposes `--run-diagnostics/--skip-diagnostics`, `--diagnostics-dir`, and `--report-output` to pipe results through `scripts/run_eval_with_diagnostics.py` and `scripts/report_phase2.py`.
+- `phase3` mirrors the evaluation flags from Phase 1 and adds `--plot-phase-traces/--skip-phase-traces`.
+- `phase4` accepts dataset specs of the form `name=alias:<formatter>` or `name=config:<train_config.yaml>`; the helper materialises prompts via `scripts/prepare_dev_set.py` using `--dataset-prompt-size`, `--dataset-split`, and `--dataset-tokenizer`.
 
 ---
 

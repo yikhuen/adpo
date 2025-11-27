@@ -1,0 +1,40 @@
+prompts:
+  path: data/dev_phase1.jsonl
+  limit: 50
+  seed: 42
+
+generation:
+  batch_size: 8
+  max_new_tokens: 512
+  cache: true
+
+models:
+  candidate:
+    kind: lora
+    checkpoint: outputs/fixed_beta/example
+  base:
+    kind: base
+
+comparisons:
+  - name: candidate_vs_base
+    a: candidate
+    b: base
+
+judges:
+  - name: primary
+    provider: openai
+    model: gpt-4o-mini
+    temperature: 0.0
+    max_tokens: 64
+  - name: secondary
+    provider: gemini
+    model: gemini-2.0-flash-001
+    temperature: 0.0
+    max_tokens: 64
+
+output:
+  dir: research/results/phase1_eval
+
+wandb:
+  enabled: false
+

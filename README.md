@@ -47,6 +47,7 @@ python scripts/eval.py all-judges --config configs/eval/judge_gpt4o_mini.yaml --
 # Shortcuts
 python scripts/eval.py openai-judge  --config configs/eval/judge_openai_only.yaml
 python scripts/eval.py gemini-judge  --config configs/eval/judge_gemini_only.yaml
+python scripts/eval.py all-judges    --config configs/eval/judge_phase1.yaml  # Phase 1 template (candidate vs base)
 ```
 
 The evaluation stack (`adaptive_dpo.eval.*`) splits responsibilities:
@@ -67,22 +68,31 @@ Generations are cached per prompt ID (with resume support) so interrupted runs r
 ## Orchestration (Phases 1–4)
 
 ```bash
-# Phase 1: fixed β sweep
-python scripts/orchestrate.py phase1
+# Phase 1: fixed β sweep + 50-prompt judge eval (writes phase1_results.json)
+python scripts/orchestrate.py phase1 \
+  --eval-config configs/eval/judge_phase1.yaml \
+  --eval-prompt-size 50
 
-# Phase 2: adaptive vs annealed vs fixed
+# Phase 2: adaptive vs annealed vs fixed (+ diagnostics + Markdown report)
 python scripts/orchestrate.py phase2 --oracle-beta 0.2
 
-# Phase 3: ablation suite
+# Phase 3: ablation suite with automatic eval + phase portraits
 python scripts/orchestrate.py phase3 --ablations full no_deadband no_ema no_clipping
 
-# Phase 4: generalisation matrix (datasets + models)
+# Phase 4: generalisation matrix (auto-prepares prompts when using alias:/config:)
 python scripts/orchestrate.py phase4 \
   --eval-config configs/eval/judge_gpt4o_mini.yaml \
-  --dataset uf=data/dev.jsonl \
-  --dataset hh=research/data/hh_eval.jsonl \
+  --dataset uf=alias:ultrafeedback \
+  --dataset hh=config:configs/train/anthropic_hh.yaml \
   --model adaptive=kind:lora,checkpoint:outputs/adaptive_beta/checkpoint-120
 ```
+
+Highlights:
+
+- Phase 1 now evaluates every β candidate (OpenAI + Gemini) and records the best pick inside `research/results/phase1_fixed_beta_grid/phase1_results.json`.
+- Phase 2 automatically runs `scripts/run_eval_with_diagnostics.py` (controller plots, entropy buckets, flip-rate checks) and generates `results/phase2_report_latest.md` via `scripts/report_phase2.py`.
+- Phase 3 triggers evaluations for each ablation, stores per-variant metrics, and emits `phase3/ablation_win_rates.png` using `scripts/plot_ablation_bar.py`.
+- Phase 4 accepts dataset specs of the form `name=alias:<formatter>` or `name=config:<yaml>`; prompts are materialised with `scripts/prepare_dev_set.py` before running the sweep.
 
 All heavy lifting lives in `adaptive_dpo.pipelines.orchestration`; the CLI layer simply parses options. Shared helpers cover config templating, artifact copying, dataset/model spec parsing, and eval triggering.
 

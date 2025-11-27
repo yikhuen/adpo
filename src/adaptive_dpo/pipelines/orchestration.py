@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import json
 import shutil
 import subprocess
 import sys
@@ -23,6 +24,13 @@ class PhaseTrainingJob:
     config: Dict[str, Any]
     output_dir: Path
     config_filename: str
+
+
+@dataclass
+class DatasetPromptOptions:
+    size: int
+    split: str
+    tokenizer: str
 
 
 def _slug(value: str) -> str:
@@ -55,7 +63,52 @@ def _relativize(path: Path) -> str:
         return str(path)
 
 
-def _parse_dataset_spec(spec: str) -> Tuple[str, str]:
+def _prepare_dataset_prompts_from_alias(label: str, alias: str, options: DatasetPromptOptions) -> Path:
+    dest_dir = RESULTS_ROOT / "phase4_datasets"
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    dest_path = dest_dir / f"{_slug(label)}.jsonl"
+    cmd = [
+        sys.executable,
+        "scripts/prepare_dev_set.py",
+        "--dataset",
+        alias,
+        "--size",
+        str(options.size),
+        "--split",
+        options.split,
+        "--tokenizer-name",
+        options.tokenizer,
+        "--out",
+        str(dest_path),
+    ]
+    subprocess.run(cmd, check=True, cwd=_REPO_ROOT)
+    return dest_path
+
+
+def _prepare_dataset_prompts_from_config(label: str, config_path: Path, options: DatasetPromptOptions) -> Path:
+    dest_dir = RESULTS_ROOT / "phase4_datasets"
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    dest_path = dest_dir / f"{_slug(label)}.jsonl"
+    resolved_config = config_path if config_path.is_absolute() else (_REPO_ROOT / config_path)
+    cmd = [
+        sys.executable,
+        "scripts/prepare_dev_set.py",
+        "--config",
+        str(resolved_config),
+        "--size",
+        str(options.size),
+        "--split",
+        options.split,
+        "--tokenizer-name",
+        options.tokenizer,
+        "--out",
+        str(dest_path),
+    ]
+    subprocess.run(cmd, check=True, cwd=_REPO_ROOT)
+    return dest_path
+
+
+def _parse_dataset_spec(spec: str, prompt_options: Optional[DatasetPromptOptions] = None) -> Tuple[str, str]:
     if "=" not in spec:
         raise typer.BadParameter(
             f"Dataset spec '{spec}' must be in the form name=path/to/prompts.jsonl."
@@ -65,6 +118,22 @@ def _parse_dataset_spec(spec: str) -> Tuple[str, str]:
         raise typer.BadParameter(f"Dataset spec '{spec}' is missing a name before '='.")
     if not path_value:
         raise typer.BadParameter(f"Dataset spec '{spec}' is missing a path after '='.")
+    if path_value.startswith("alias:"):
+        if prompt_options is None:
+            raise typer.BadParameter(
+                f"Dataset spec '{spec}' uses alias:, which requires prompt preparation options."
+            )
+        alias = path_value.split(":", 1)[1]
+        prepared = _prepare_dataset_prompts_from_alias(label, alias, prompt_options)
+        return label, _relativize(prepared)
+    if path_value.startswith("config:"):
+        if prompt_options is None:
+            raise typer.BadParameter(
+                f"Dataset spec '{spec}' uses config:, which requires prompt preparation options."
+            )
+        config_path = Path(path_value.split(":", 1)[1])
+        prepared = _prepare_dataset_prompts_from_config(label, config_path, prompt_options)
+        return label, _relativize(prepared)
     resolved = _resolve_path(Path(path_value))
     if not resolved.exists():
         raise typer.BadParameter(f"Dataset prompt file '{resolved}' does not exist.")
@@ -208,9 +277,32 @@ def _phase_output_dir(phase: str) -> Path:
 def run_phase1(
     base_config: Path,
     betas: List[float],
+    eval_config: Optional[Path],
+    eval_prompt_size: int,
+    eval_model_slot: str,
+    selection_comparison: str,
+    selection_judge: str,
+    force_eval: bool,
+    results_path: Optional[Path],
+    run_eval: bool,
 ) -> None:
     base_cfg = _load_yaml(base_config)
     phase_dir = _phase_output_dir("phase1_fixed_beta_grid")
+    evaluation_enabled = run_eval and eval_config is not None
+    eval_cfg_template: Optional[Dict[str, Any]] = None
+    eval_records: List[Dict[str, Any]] = []
+    results_destination = results_path
+    if results_destination is None:
+        results_destination = phase_dir / "phase1_results.json"
+    elif not results_destination.is_absolute():
+        results_destination = _REPO_ROOT / results_destination
+
+    if evaluation_enabled:
+        eval_cfg_template = _load_yaml(eval_config)  # type: ignore[arg-type]
+        prompts_cfg = eval_cfg_template.setdefault("prompts", {})
+        if eval_prompt_size > 0:
+            prompts_cfg["limit"] = eval_prompt_size
+        _prepare_eval_prompts(eval_cfg_template, base_config, eval_prompt_size)
 
     for beta in betas:
         cfg = copy.deepcopy(base_cfg)
@@ -229,6 +321,90 @@ def run_phase1(
         )
         _run_training_job(job, phase_dir / job.label)
 
+        if eval_cfg_template:
+            eval_cfg = copy.deepcopy(eval_cfg_template)
+            eval_output_dir = phase_dir / "evaluation" / job.label
+            eval_cfg.setdefault("output", {})
+            eval_cfg["output"]["dir"] = str(eval_output_dir)
+            models = eval_cfg.get("models") or {}
+            if eval_model_slot not in models:
+                raise typer.BadParameter(
+                    f"Eval config is missing model slot '{eval_model_slot}' required for Phase 1."
+                )
+            candidate_path = _resolve_path(job.output_dir)
+            models[eval_model_slot]["checkpoint"] = str(candidate_path)
+            _validate_comparisons_models(eval_cfg)
+            eval_cfg_path = _write_config(eval_cfg, f"phase1_eval_{job.label}.yaml")
+            eval_cmd = [
+                sys.executable,
+                "scripts/eval.py",
+                "--config",
+                str(eval_cfg_path),
+            ]
+            if eval_prompt_size > 0:
+                eval_cmd.extend(["--limit", str(eval_prompt_size)])
+            if force_eval:
+                eval_cmd.append("--force-judge")
+            typer.echo(f"[orchestrate] Evaluating Phase 1 beta={beta}")
+            subprocess.run(eval_cmd, check=True, cwd=_REPO_ROOT)
+
+            metrics_path = eval_output_dir / "metrics" / "summary.json"
+            if not metrics_path.exists():
+                raise FileNotFoundError(
+                    f"Expected metrics summary at {metrics_path} for beta={beta}."
+                )
+            with metrics_path.open("r", encoding="utf-8") as metrics_file:
+                metrics_summary = json.load(metrics_file)
+
+            comparison_metrics = metrics_summary.get(selection_comparison)
+            if comparison_metrics is None:
+                raise typer.BadParameter(
+                    f"Comparison '{selection_comparison}' not found in eval metrics for beta={beta}."
+                )
+            judge_metrics = comparison_metrics.get(selection_judge)
+            if judge_metrics is None:
+                raise typer.BadParameter(
+                    f"Judge '{selection_judge}' not found in eval metrics for beta={beta}."
+                )
+
+            record = {
+                "beta": float(beta),
+                "label": job.label,
+                "win_rate": float(judge_metrics.get("win_rate", 0.0)),
+                "wins": int(judge_metrics.get("wins", 0)),
+                "total": int(judge_metrics.get("total", 0)),
+                "comparison": selection_comparison,
+                "judge": selection_judge,
+                "metrics_file": _relativize(metrics_path),
+                "config_file": _relativize(eval_cfg_path),
+                "judges": comparison_metrics,
+            }
+            eval_records.append(record)
+
+    if eval_records:
+        eval_records.sort(key=lambda entry: entry["beta"])
+        best_record = max(eval_records, key=lambda entry: entry["win_rate"])
+        results_payload = {
+            "selection_comparison": selection_comparison,
+            "selection_judge": selection_judge,
+            "best_beta": best_record["beta"],
+            "best_record": best_record,
+            "records": eval_records,
+        }
+        results_destination.parent.mkdir(parents=True, exist_ok=True)
+        with results_destination.open("w", encoding="utf-8") as f:
+            json.dump(results_payload, f, indent=2)
+        typer.echo(
+            "[orchestrate] Phase 1 best beta={beta:.3f} (win_rate={rate:.3f}, judge={judge}, comparison={comparison}) "
+            "-> results stored at {path}".format(
+                beta=best_record["beta"],
+                rate=best_record["win_rate"],
+                judge=selection_judge,
+                comparison=selection_comparison,
+                path=_relativize(results_destination),
+            )
+        )
+
 
 def run_phase2(
     adaptive_config: Path,
@@ -241,6 +417,9 @@ def run_phase2(
     audit_batch_index: int,
     audit_wandb_project: Optional[str],
     eval_prompt_size: int,
+    run_diagnostics: bool,
+    diagnostics_dir: Optional[Path],
+    report_output: Path,
 ) -> None:
     phase_dir = _phase_output_dir("phase2_adaptive_vs_baselines")
 
@@ -297,6 +476,7 @@ def run_phase2(
     eval_cmd = [
         sys.executable,
         "scripts/eval.py",
+        "all-judges",
         "--config",
         str(eval_config),
     ]
@@ -305,12 +485,14 @@ def run_phase2(
         eval_cmd.append("--force-judge")
     subprocess.run(eval_cmd, check=True, cwd=_REPO_ROOT)
     eval_results_root = eval_cfg.get("output", {}).get("dir", "research/results/eval")
-    metrics_dir = _resolve_path(Path(eval_results_root)) / "metrics"
+    eval_results_root_path = _resolve_path(Path(eval_results_root))
+    metrics_dir = eval_results_root_path / "metrics"
     if metrics_dir.exists():
         shutil.copytree(metrics_dir, eval_output_dir / "metrics", dirs_exist_ok=True)
 
     adaptive_output = run_outputs.get("adaptive")
     adaptive_cfg = config_map.get("adaptive")
+    diagnostics_path: Optional[Path] = None
     if adaptive_output and adaptive_cfg:
         trainer_cfg = adaptive_cfg.get("trainer", {})
         per_device = int(trainer_cfg.get("per_device_train_batch_size", 1))
@@ -342,13 +524,80 @@ def run_phase2(
         typer.echo("[orchestrate] Running poison audit for Phase 2 adaptive controller")
         subprocess.run(audit_cmd, check=True, cwd=_REPO_ROOT)
 
+    if run_diagnostics:
+        diagnostics_path = diagnostics_dir
+        if diagnostics_path is None:
+            diagnostics_path = phase_dir / "diagnostics"
+        elif not diagnostics_path.is_absolute():
+            diagnostics_path = _REPO_ROOT / diagnostics_path
+        diagnostics_path.mkdir(parents=True, exist_ok=True)
+        controller_dir = diagnostics_path / "controller_plots"
+        controller_dir.mkdir(parents=True, exist_ok=True)
+        phase_trace_file = adaptive_output / "phase_trace.json" if adaptive_output else None
+
+        diag_cmd = [
+            sys.executable,
+            "scripts/run_eval_with_diagnostics.py",
+            "--eval-subcommand",
+            "all-judges",
+            "--eval-config",
+            str(eval_config),
+            "--limit",
+            str(eval_prompt_size),
+            "--skip-eval",
+            "--phase-output-dir",
+            str(controller_dir),
+            "--phase-run-label",
+            "phase2_adaptive",
+            "--summary-output",
+            str(diagnostics_path / "eval_summary.csv"),
+            "--entropy-output",
+            str(diagnostics_path / "entropy_bucket_summary.json"),
+            "--fliprate-output",
+            str(diagnostics_path / "fliprate_summary.json"),
+            "--fliprate-plot",
+            str(diagnostics_path / "fliprate_plot.png"),
+        ]
+        if phase_trace_file and phase_trace_file.exists():
+            diag_cmd.extend(["--phase-trace", str(phase_trace_file)])
+        subprocess.run(diag_cmd, check=True, cwd=_REPO_ROOT)
+
+    resolved_report = report_output if report_output.is_absolute() else _REPO_ROOT / report_output
+    report_cmd = [
+        sys.executable,
+        "scripts/report_phase2.py",
+        "--phase-dir",
+        str(phase_dir),
+        "--eval-output",
+        str(eval_results_root_path),
+        "--output",
+        str(resolved_report),
+    ]
+    if diagnostics_path:
+        report_cmd.extend(["--diagnostics-dir", str(diagnostics_path)])
+    subprocess.run(report_cmd, check=True, cwd=_REPO_ROOT)
+
 
 def run_phase3(
     base_config: Path,
     ablations: List[str],
+    eval_config: Optional[Path],
+    eval_prompt_size: int,
+    eval_model_slot: str,
+    force_eval: bool,
+    plot_phase_traces: bool,
 ) -> None:
     base_cfg = _load_yaml(base_config)
     phase_dir = _phase_output_dir("phase3_ablation")
+    eval_cfg_template: Optional[Dict[str, Any]] = None
+    aggregate_metrics: Dict[str, Dict[str, Any]] = {}
+
+    if eval_config:
+        eval_cfg_template = _load_yaml(eval_config)
+        prompts_cfg = eval_cfg_template.setdefault("prompts", {})
+        if eval_prompt_size > 0:
+            prompts_cfg["limit"] = eval_prompt_size
+        _prepare_eval_prompts(eval_cfg_template, base_config, eval_prompt_size)
 
     variant_overrides = {
         "no_deadband": {"deadband": 0.0},
@@ -381,17 +630,102 @@ def run_phase3(
         )
         _run_training_job(job, phase_dir / job.label)
 
+        run_output_path = _resolve_path(job.output_dir)
+
+        if plot_phase_traces:
+            phase_trace_path = run_output_path / "phase_trace.json"
+            if phase_trace_path.exists():
+                trace_dir = phase_dir / "phase_traces" / job.label
+                trace_dir.mkdir(parents=True, exist_ok=True)
+                trace_cmd = [
+                    sys.executable,
+                    "scripts/plot_phase_trace.py",
+                    "--phase-trace",
+                    str(phase_trace_path),
+                    "--output-dir",
+                    str(trace_dir),
+                    "--run-label",
+                    job.label,
+                ]
+                subprocess.run(trace_cmd, check=True, cwd=_REPO_ROOT)
+
+        if eval_cfg_template:
+            eval_cfg = copy.deepcopy(eval_cfg_template)
+            eval_output_dir = phase_dir / "evaluation" / job.label
+            eval_cfg.setdefault("output", {})
+            eval_cfg["output"]["dir"] = str(eval_output_dir)
+            models = eval_cfg.get("models") or {}
+            if eval_model_slot not in models:
+                raise typer.BadParameter(
+                    f"Eval config is missing model slot '{eval_model_slot}' required for Phase 3."
+                )
+            models[eval_model_slot]["checkpoint"] = str(run_output_path)
+            _validate_comparisons_models(eval_cfg)
+            eval_cfg_path = _write_config(eval_cfg, f"phase3_eval_{job.label}.yaml")
+            eval_cmd = [
+                sys.executable,
+                "scripts/eval.py",
+                "all-judges",
+                "--config",
+                str(eval_cfg_path),
+            ]
+            if eval_prompt_size > 0:
+                eval_cmd.extend(["--limit", str(eval_prompt_size)])
+            if force_eval:
+                eval_cmd.append("--force-judge")
+            subprocess.run(eval_cmd, check=True, cwd=_REPO_ROOT)
+
+            metrics_path = eval_output_dir / "metrics" / "summary.json"
+            if not metrics_path.exists():
+                raise FileNotFoundError(
+                    f"Missing evaluation metrics for {job.label} at {metrics_path}."
+                )
+            with metrics_path.open("r", encoding="utf-8") as f:
+                metrics_summary = json.load(f)
+            for comparison, judge_block in metrics_summary.items():
+                agg_entry = aggregate_metrics.setdefault(comparison, {})
+                agg_entry.update(judge_block)
+
+    if aggregate_metrics:
+        metrics_root = phase_dir / "metrics"
+        metrics_root.mkdir(parents=True, exist_ok=True)
+        summary_path = metrics_root / "summary.json"
+        with summary_path.open("w", encoding="utf-8") as f:
+            json.dump(aggregate_metrics, f, indent=2)
+
+        bar_output = phase_dir / "ablation_win_rates.png"
+        comparisons_arg = ",".join(sorted(aggregate_metrics.keys()))
+        bar_cmd = [
+            sys.executable,
+            "scripts/plot_ablation_bar.py",
+            "--metrics",
+            str(summary_path),
+            "--output",
+            str(bar_output),
+            "--comparisons",
+            comparisons_arg,
+        ]
+        subprocess.run(bar_cmd, check=True, cwd=_REPO_ROOT)
+
 
 def run_phase4(
     eval_config: Path,
     datasets: List[str],
     models: List[str],
     force_eval: bool,
+    dataset_prompt_size: int,
+    dataset_split: str,
+    dataset_tokenizer: str,
 ) -> None:
     base_cfg = _load_yaml(eval_config)
     phase_dir = _phase_output_dir("phase4_generalization")
 
-    dataset_specs = [_parse_dataset_spec(spec) for spec in datasets]
+    prompt_options = DatasetPromptOptions(
+        size=dataset_prompt_size,
+        split=dataset_split,
+        tokenizer=dataset_tokenizer,
+    )
+    dataset_specs = [_parse_dataset_spec(spec, prompt_options) for spec in datasets]
     if not dataset_specs:
         raise typer.BadParameter("At least one --dataset entry is required for Phase 4.")
 
@@ -407,6 +741,8 @@ def run_phase4(
         raise typer.BadParameter(
             "No models defined. Provide --model entries or ensure the base eval config defines models."
         )
+
+    dataset_metrics: Dict[str, Dict[str, Any]] = {}
 
     for dataset_label, dataset_path in dataset_specs:
         cfg = copy.deepcopy(base_cfg)
@@ -443,6 +779,15 @@ def run_phase4(
         if metrics_dir.exists():
             dest_metrics = dataset_phase_dir / "metrics"
             shutil.copytree(metrics_dir, dest_metrics, dirs_exist_ok=True)
+            summary_path = dest_metrics / "summary.json"
+            if summary_path.exists():
+                with summary_path.open("r", encoding="utf-8") as f:
+                    dataset_metrics[dataset_label] = json.load(f)
+
+    if dataset_metrics:
+        summary_root = phase_dir / "summary.json"
+        with summary_root.open("w", encoding="utf-8") as f:
+            json.dump(dataset_metrics, f, indent=2)
 
 
 __all__ = [

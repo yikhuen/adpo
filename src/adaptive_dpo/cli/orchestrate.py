@@ -25,8 +25,46 @@ def phase1(
         [0.05, 0.10, 0.20],
         help="Fixed beta values to sweep.",
     ),
+    eval_config: Optional[Path] = typer.Option(
+        Path("configs/eval/judge_phase1.yaml"),
+        help="Evaluation config template for Phase 1 sweeps.",
+    ),
+    eval_prompt_size: int = typer.Option(50, help="Number of prompts to sample per beta evaluation."),
+    eval_model_slot: str = typer.Option(
+        "candidate",
+        help="Name of the model entry in the eval config to overwrite with each beta checkpoint.",
+    ),
+    selection_comparison: str = typer.Option(
+        "candidate_vs_base",
+        help="Comparison key (from eval config) used to pick the best beta.",
+    ),
+    selection_judge: str = typer.Option(
+        "primary",
+        help="Judge name used to pick the best beta.",
+    ),
+    force_eval: bool = typer.Option(False, help="Force re-run of judges even when cached results exist."),
+    results_path: Optional[Path] = typer.Option(
+        None,
+        help="Optional override for the JSON file storing Phase 1 evaluation results.",
+    ),
+    run_eval: bool = typer.Option(
+        True,
+        "--run-eval/--skip-eval",
+        help="Whether to evaluate each beta checkpoint and pick a winner.",
+    ),
 ):
-    run_phase1(base_config, betas)
+    run_phase1(
+        base_config,
+        betas,
+        eval_config,
+        eval_prompt_size,
+        eval_model_slot,
+        selection_comparison,
+        selection_judge,
+        force_eval,
+        results_path,
+        run_eval,
+    )
 
 
 @app.command()
@@ -62,6 +100,19 @@ def phase2(
     eval_prompt_size: int = typer.Option(
         200, help="Number of evaluation prompts to generate for Phase 2 judges."
     ),
+    run_diagnostics: bool = typer.Option(
+        True,
+        "--run-diagnostics/--skip-diagnostics",
+        help="Run the extended diagnostics pipeline (controller plots, entropy buckets, flip-rate).",
+    ),
+    diagnostics_dir: Optional[Path] = typer.Option(
+        None,
+        help="Optional override for Phase 2 diagnostics output directory.",
+    ),
+    report_output: Path = typer.Option(
+        Path("results/phase2_report_latest.md"),
+        help="Markdown file to write the Phase 2 summary report.",
+    ),
 ):
     run_phase2(
         adaptive_config,
@@ -74,6 +125,9 @@ def phase2(
         audit_batch_index,
         audit_wandb_project,
         eval_prompt_size,
+        run_diagnostics,
+        diagnostics_dir,
+        report_output,
     )
 
 
@@ -87,8 +141,31 @@ def phase3(
         ["full", "no_deadband", "no_ema", "no_clipping", "no_fast_loop"],
         help="Controller variants to run.",
     ),
+    eval_config: Optional[Path] = typer.Option(
+        Path("configs/eval/judge_phase1.yaml"),
+        help="Evaluation config template applied to each ablation run.",
+    ),
+    eval_prompt_size: int = typer.Option(200, help="Number of prompts per ablation evaluation."),
+    eval_model_slot: str = typer.Option(
+        "candidate",
+        help="Eval config model slot overwritten with each ablation checkpoint.",
+    ),
+    force_eval: bool = typer.Option(False, help="Force judges to re-run for every ablation."),
+    plot_phase_traces: bool = typer.Option(
+        True,
+        "--plot-phase-traces/--skip-phase-traces",
+        help="Generate controller phase portraits/time-series per ablation.",
+    ),
 ):
-    run_phase3(base_config, ablations)
+    run_phase3(
+        base_config,
+        ablations,
+        eval_config,
+        eval_prompt_size,
+        eval_model_slot,
+        force_eval,
+        plot_phase_traces,
+    )
 
 
 @app.command()
@@ -107,8 +184,28 @@ def phase4(
         help="Model spec 'name=kind:lora,checkpoint:path'. Overrides config models when provided.",
     ),
     force_eval: bool = typer.Option(False, help="Force re-run judges even if cached decisions exist."),
+    dataset_prompt_size: int = typer.Option(
+        200,
+        help="Prompt count when materialising datasets via alias:/config: specifications.",
+    ),
+    dataset_split: str = typer.Option(
+        "test",
+        help="Dataset split forwarded to scripts/prepare_dev_set.py for alias:/config: specs.",
+    ),
+    dataset_tokenizer: str = typer.Option(
+        "Qwen/Qwen2.5-7B-Instruct",
+        help="Tokenizer used when formatting prompts via scripts/prepare_dev_set.py.",
+    ),
 ):
-    run_phase4(eval_config, datasets, models, force_eval)
+    run_phase4(
+        eval_config,
+        datasets,
+        models,
+        force_eval,
+        dataset_prompt_size,
+        dataset_split,
+        dataset_tokenizer,
+    )
 
 
 def entrypoint():

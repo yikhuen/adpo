@@ -24,6 +24,7 @@ def _install_gpu_dependency_mocks() -> None:
     if os.getenv("ADPO_DISABLE_GPU_MOCKS") == "1":
         return
     _mock_unsloth()
+    _mock_trl()
 
 
 def _mock_unsloth() -> None:
@@ -83,6 +84,25 @@ def _mock_unsloth() -> None:
 
         module.FastLanguageModel = _MockFastLanguageModel  # type: ignore[attr-defined]
         sys.modules["unsloth"] = module
+
+
+def _mock_trl() -> None:
+    if "trl" in sys.modules:
+        return
+    module = types.ModuleType("trl")
+
+    class _DummyDPOConfig:
+        def __init__(self, *args, **kwargs):
+            self.kwargs = kwargs
+
+    class _DummyDPOTrainer:
+        def __init__(self, *args, **kwargs):
+            self.args = args
+            self.kwargs = kwargs
+
+    module.DPOConfig = _DummyDPOConfig  # type: ignore[attr-defined]
+    module.DPOTrainer = _DummyDPOTrainer  # type: ignore[attr-defined]
+    sys.modules["trl"] = module
 
 
 _install_gpu_dependency_mocks()
