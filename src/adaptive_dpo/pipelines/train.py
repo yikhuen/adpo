@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import json
 import time
 from pathlib import Path
@@ -17,7 +18,7 @@ from adaptive_dpo.controllers import (
     RobustHybridController,
 )
 from adaptive_dpo.data import load_preference_dataset, load_ultrafeedback_subset_formatted
-from adaptive_dpo.modeling import load_qwen25_7b
+from adaptive_dpo.modeling import configure_qwen25_7b_lora, load_qwen25_7b_base
 from adaptive_dpo.trainer import AdaptiveDPOTrainer, LoggingDPOTrainer
 from adaptive_dpo.utils.repro import set_global_seed
 from adaptive_dpo.utils.schedules import AnnealedBetaCallback, AnnealedBetaConfig
@@ -83,8 +84,9 @@ def _load_policy_and_reference(model_cfg: Dict[str, Any]) -> Tuple[Any, Any, Any
         "load_in_4bit": bool(model_cfg.get("load_in_4bit", True)),
         "dtype": model_cfg.get("dtype", None),
     }
-    model, tokenizer = load_qwen25_7b(**kwargs)
-    ref_model, _ = load_qwen25_7b(**kwargs)
+    base_model, tokenizer = load_qwen25_7b_base(**kwargs)
+    ref_model = copy.deepcopy(base_model)
+    model = configure_qwen25_7b_lora(base_model)
     return model, ref_model, tokenizer
 
 
