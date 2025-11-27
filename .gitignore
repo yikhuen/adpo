@@ -19,7 +19,7 @@ wandb/
 # Data / cache / outputs
 cache/
 .data/
-data/
+/data/
 eval_results/
 outputs/
 checkpoints/
