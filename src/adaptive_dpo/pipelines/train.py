@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import time
 from pathlib import Path
+from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
 from trl import DPOConfig, DPOTrainer
@@ -20,6 +21,17 @@ from adaptive_dpo.modeling import load_qwen25_7b
 from adaptive_dpo.trainer import AdaptiveDPOTrainer, LoggingDPOTrainer
 from adaptive_dpo.utils.repro import set_global_seed
 from adaptive_dpo.utils.schedules import AnnealedBetaCallback, AnnealedBetaConfig
+
+
+@dataclass
+class TrainerArtifacts:
+    trainer: DPOTrainer
+    run_output_dir: Path
+    controller: Optional[object]
+    tokenizer: Any
+    train_dataset: Any
+    schedule_cfg: Optional[Dict[str, Any]]
+    trainer_cfg: Dict[str, Any]
 
 
 def _load_dataset(tokenizer, ds_cfg: Dict[str, Any]):
@@ -63,6 +75,24 @@ def _instantiate_controller(controller_cfg: Optional[Dict[str, Any]]) -> Tuple[O
         return RobustHybridController(cfg), cfg.beta_init
     cfg = BetaControllerConfig(**controller_payload)
     return AdaptiveBetaController(cfg), cfg.beta_init
+
+
+def _load_policy_and_reference(model_cfg: Dict[str, Any]) -> Tuple[Any, Any, Any]:
+    kwargs = {
+        "max_seq_length": int(model_cfg.get("max_seq_length", 4096)),
+        "load_in_4bit": bool(model_cfg.get("load_in_4bit", True)),
+        "dtype": model_cfg.get("dtype", None),
+    }
+    model, tokenizer = load_qwen25_7b(**kwargs)
+    ref_model, _ = load_qwen25_7b(**kwargs)
+    return model, ref_model, tokenizer
+
+
+def _prepare_run_output_dir(tr_cfg: Dict[str, Any], seed: int, total_runs: int) -> Path:
+    base_output_dir = Path(tr_cfg.get("output_dir", "outputs"))
+    run_output_dir = base_output_dir / f"seed_{seed}" if total_runs > 1 else base_output_dir
+    run_output_dir.mkdir(parents=True, exist_ok=True)
+    return run_output_dir
 
 
 def _save_phase_trace(run_output_dir: Path, phase_trace: List[Dict[str, Any]]) -> Path:
@@ -139,7 +169,7 @@ def _build_trainer(
     seed: int,
     run_idx: int,
     total_runs: int,
-) -> Tuple[DPOTrainer, Path, Optional[object], Dict[str, Any], Dict[str, Any]]:
+) -> TrainerArtifacts:
     model_cfg = cfg["model"]
     tr_cfg = cfg["trainer"]
     ds_cfg = cfg["dataset"]
@@ -147,16 +177,7 @@ def _build_trainer(
 
     set_global_seed(seed)
 
-    model, tokenizer = load_qwen25_7b(
-        max_seq_length=int(model_cfg.get("max_seq_length", 4096)),
-        load_in_4bit=bool(model_cfg.get("load_in_4bit", True)),
-        dtype=model_cfg.get("dtype", None),
-    )
-    ref_model, _ = load_qwen25_7b(
-        max_seq_length=int(model_cfg.get("max_seq_length", 4096)),
-        load_in_4bit=bool(model_cfg.get("load_in_4bit", True)),
-        dtype=model_cfg.get("dtype", None),
-    )
+    model, ref_model, tokenizer = _load_policy_and_reference(model_cfg)
 
     dataset = _load_dataset(tokenizer, ds_cfg)
     train_split_name = tr_cfg.get("train_split", "train")
@@ -164,9 +185,7 @@ def _build_trainer(
         raise KeyError(f"Requested train split '{train_split_name}' not found in dataset splits {list(dataset.keys())}.")
     train_dataset = dataset[train_split_name]
 
-    base_output_dir = Path(tr_cfg.get("output_dir", "outputs"))
-    run_output_dir = base_output_dir / f"seed_{seed}" if total_runs > 1 else base_output_dir
-    run_output_dir.mkdir(parents=True, exist_ok=True)
+    run_output_dir = _prepare_run_output_dir(tr_cfg, seed, total_runs)
 
     args = _build_training_args(tr_cfg, seed, run_output_dir)
     controller, controller_beta = _instantiate_controller(controller_cfg)
@@ -174,34 +193,27 @@ def _build_trainer(
     kl_log_alpha = float(tr_cfg.get("kl_log_alpha", 0.10))
     high_kl_threshold = float(tr_cfg.get("high_kl_threshold")) if tr_cfg.get("high_kl_threshold") is not None else None
 
+    trainer_kwargs = dict(
+        model=model,
+        ref_model=ref_model,
+        args=args,
+        beta=beta_init,
+        train_dataset=train_dataset,
+        tokenizer=tokenizer,
+        max_length=int(tr_cfg.get("max_length", 1024)),
+        max_prompt_length=int(tr_cfg.get("max_prompt_length", 512)),
+        kl_log_alpha=kl_log_alpha,
+        fixed_beta_value=beta_init,
+    )
+
     if controller:
         trainer: DPOTrainer = AdaptiveDPOTrainer(
             beta_controller=controller,
-            model=model,
-            ref_model=ref_model,
-            args=args,
-            beta=beta_init,
-            train_dataset=train_dataset,
-            tokenizer=tokenizer,
-            max_length=int(tr_cfg.get("max_length", 1024)),
-            max_prompt_length=int(tr_cfg.get("max_prompt_length", 512)),
-            kl_log_alpha=kl_log_alpha,
-            fixed_beta_value=beta_init,
             high_kl_threshold=high_kl_threshold,
+            **trainer_kwargs,
         )
     else:
-        trainer = LoggingDPOTrainer(
-            model=model,
-            ref_model=ref_model,
-            args=args,
-            beta=beta_init,
-            train_dataset=train_dataset,
-            tokenizer=tokenizer,
-            max_length=int(tr_cfg.get("max_length", 1024)),
-            max_prompt_length=int(tr_cfg.get("max_prompt_length", 512)),
-            kl_log_alpha=kl_log_alpha,
-            fixed_beta_value=beta_init,
-        )
+        trainer = LoggingDPOTrainer(**trainer_kwargs)
 
     schedule_cfg = cfg.get("beta_schedule")
     if schedule_cfg:
@@ -209,19 +221,25 @@ def _build_trainer(
         schedule_callback.trainer = trainer
         trainer.add_callback(schedule_callback)
 
-    extras = {
-        "tokenizer": tokenizer,
-        "train_dataset": train_dataset,
-        "schedule_cfg": schedule_cfg,
-        "controller": controller,
-    }
-    return trainer, run_output_dir, controller, extras, tr_cfg
+    return TrainerArtifacts(
+        trainer=trainer,
+        run_output_dir=run_output_dir,
+        controller=controller,
+        tokenizer=tokenizer,
+        train_dataset=train_dataset,
+        schedule_cfg=schedule_cfg,
+        trainer_cfg=tr_cfg,
+    )
 
 
 def _train_single_run(cfg: Dict[str, Any], seed: int, run_idx: int, total_runs: int) -> Dict[str, Any]:
-    trainer, run_output_dir, controller, extras, tr_cfg = _build_trainer(cfg, seed, run_idx, total_runs)
-    tokenizer = extras["tokenizer"]
-    schedule_cfg = extras["schedule_cfg"]
+    artifacts = _build_trainer(cfg, seed, run_idx, total_runs)
+    trainer = artifacts.trainer
+    run_output_dir = artifacts.run_output_dir
+    controller = artifacts.controller
+    tokenizer = artifacts.tokenizer
+    schedule_cfg = artifacts.schedule_cfg
+    tr_cfg = artifacts.trainer_cfg
 
     start_time = time.time()
     trainer.train()
@@ -251,7 +269,7 @@ def _train_single_run(cfg: Dict[str, Any], seed: int, run_idx: int, total_runs: 
         "run_index": run_idx,
         "output_dir": str(run_output_dir),
         "train_global_step": trainer.state.global_step,
-        "train_examples": len(extras["train_dataset"]),
+        "train_examples": len(artifacts.train_dataset),
         "train_runtime_seconds": final_log.get("train_runtime"),
         "train_samples_per_second": final_log.get("train_samples_per_second"),
         "train_steps_per_second": final_log.get("train_steps_per_second"),

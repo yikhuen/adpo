@@ -1,9 +1,11 @@
 from typing import Any, Dict, Optional, List, Tuple
 
+import logging
 import math
-import sys
 import torch
 from trl import DPOTrainer
+
+logger = logging.getLogger(__name__)
 
 
 def _determine_vocab_size(tokenizer: Any, default: int = 32000) -> int:
@@ -191,13 +193,13 @@ class LoggingDPOTrainer(DPOTrainer):
         try:
             self.log(log_dict)
         except Exception as exc:
-            print(f"[adaptive-dpo] Warning: Trainer.log failed: {exc}", file=sys.stderr)
+            logger.warning("Trainer.log failed: %s", exc, exc_info=exc)
         accelerator = getattr(self, "accelerator", None)
         if accelerator is not None:
             try:
                 accelerator.log(log_dict, step=self.state.global_step)
             except Exception as exc:
-                print(f"[adaptive-dpo] Warning: Accelerator.log failed: {exc}", file=sys.stderr)
+                logger.warning("Accelerator.log failed: %s", exc, exc_info=exc)
 
         if self.is_world_process_zero():
             snapshot = {
@@ -281,4 +283,4 @@ class AdaptiveDPOTrainer(LoggingDPOTrainer):
             pass
 
         for _, kl_value, snippet in rows:
-            print(f"[adaptive-dpo] KL spike at step {step}: KL={kl_value:.4f} :: {snippet[:120]}")
+            logger.info("KL spike at step %s: KL=%.4f :: %s", step, kl_value, snippet[:120])

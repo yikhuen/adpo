@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import shutil
 import subprocess
 import sys
@@ -196,7 +197,7 @@ def run_phase1(
     phase_dir = _phase_output_dir("phase1_fixed_beta_grid")
 
     for beta in betas:
-        cfg = yaml.safe_load(yaml.dump(base_cfg))
+        cfg = copy.deepcopy(base_cfg)
         cfg["fixed_beta"] = float(beta)
         output_dir = Path(cfg["trainer"].get("output_dir", "outputs/fixed_beta"))
         run_dir = output_dir / f"beta_{_slug(f'{beta:.3f}')}"
@@ -325,7 +326,7 @@ def run_phase3(
     }
 
     for variant in ablations:
-        cfg = yaml.safe_load(yaml.dump(base_cfg))
+        cfg = copy.deepcopy(base_cfg)
         overrides = cfg.setdefault("beta_controller", {})
         label = variant
         if variant not in variant_overrides and variant != "full":
@@ -372,8 +373,8 @@ def run_phase4(
         )
 
     for dataset_label, dataset_path in dataset_specs:
-        cfg = yaml.safe_load(yaml.dump(base_cfg))
-        cfg["models"] = yaml.safe_load(yaml.dump(model_map))
+        cfg = copy.deepcopy(base_cfg)
+        cfg["models"] = copy.deepcopy(model_map)
         prompts_cfg = cfg.setdefault("prompts", {})
         prompts_cfg["path"] = dataset_path
 

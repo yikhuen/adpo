@@ -10,7 +10,25 @@ authors = [{ name = "Adaptive DPO Authors" }]
 readme = "README.md"
 requires-python = ">=3.9"
 dependencies = [
-    "typer>=0.9",
+    "accelerate",
+    "bitsandbytes",
+    "datasets>=3.4.1,<4.0.0",
+    "google-generativeai>=0.5.0",
+    "hf_transfer",
+    "huggingface_hub>=0.34.0",
+    "matplotlib",
+    "openai>=1.40.0",
+    "peft",
+    "protobuf",
+    "pydantic",
+    "pyyaml",
+    "seaborn",
+    "sentencepiece",
+    "transformers==4.55.4",
+    "trl==0.22.2",
+    "typer[all]>=0.9",
+    "unsloth",
+    "wandb",
 ]
 
 [project.optional-dependencies]
