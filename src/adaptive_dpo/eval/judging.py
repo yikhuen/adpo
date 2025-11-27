@@ -54,6 +54,7 @@ class _OpenAIBackend:
         self.max_attempts = max(1, max_attempts)
 
     def generate(self, formatted_prompt: str) -> str:
+        openai = _lazy_import_openai()
         messages: List[Dict[str, str]] = [
             {"role": "system", "content": self.system_prompt},
             {"role": "user", "content": formatted_prompt},
@@ -111,6 +112,7 @@ class _HFCausalBackend:
         self.max_tokens = max_tokens
 
     def generate(self, formatted_prompt: str) -> str:
+        torch = _lazy_import_torch()
         inputs = self.tokenizer(formatted_prompt, return_tensors="pt").to(self.model.device)
         with torch.no_grad():
             outputs = self.model.generate(

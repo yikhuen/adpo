@@ -2,13 +2,12 @@ from typing import Any, Dict, Optional, List, Tuple
 
 import logging
 import math
-from typing import cast
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from trl.trainer.dpo_trainer import DPOTrainer
-from trl.trainer.utils import flush_left, flush_right, pad_to_length, selective_log_softmax
+from trl.trainer.utils import flush_left, flush_right, selective_log_softmax
 
 logger = logging.getLogger(__name__)
 
