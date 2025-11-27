@@ -4,7 +4,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 import typer
 import yaml
@@ -260,26 +260,31 @@ def phase3(
         help="Base adaptive config used for ablations.",
     ),
     ablations: List[str] = typer.Option(
-        ["full", "no_deadband", "no_ema", "no_clipping"],
+        ["full", "no_deadband", "no_ema", "no_clipping", "no_fast_loop"],
         help="Controller variants to run.",
     ),
 ):
-    """Run Phase 3 controller ablations (EMA, deadband, clipping)."""
+    """Run Phase 3 controller ablations (EMA, deadband, clipping, entropy gain)."""
     base_cfg = _load_yaml(base_config)
     phase_dir = _phase_output_dir("phase3_ablation")
+
+    variant_overrides = {
+        "no_deadband": {"deadband": 0.0},
+        "no_ema": {"ema_alpha": 1.0},
+        "no_clipping": {"beta_min": 0.0, "beta_max": 10000.0},
+        "no_fast_loop": {"lambda_entropy": 0.0},
+    }
 
     for variant in ablations:
         cfg = yaml.safe_load(yaml.dump(base_cfg))
         overrides = cfg.setdefault("beta_controller", {})
         label = variant
-        if variant == "no_deadband":
-            overrides["use_deadband"] = False
-        elif variant == "no_ema":
-            overrides["use_ema"] = False
-        elif variant == "no_clipping":
-            overrides["use_clipping"] = False
-        elif variant != "full":
+        if variant not in variant_overrides and variant != "full":
             raise typer.BadParameter(f"Unknown ablation variant '{variant}'.")
+
+        variant_values = variant_overrides.get(variant)
+        if variant_values:
+            overrides.update(variant_values)
 
         run_output = Path(cfg["trainer"].get("output_dir", "outputs/adaptive_beta")) / f"ablation_{label}"
         cfg["trainer"]["output_dir"] = str(run_output)

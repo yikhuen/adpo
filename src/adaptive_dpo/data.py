@@ -151,6 +151,39 @@ def _format_sycophancy(example: Dict[str, Any], tokenizer, format_kwargs: Option
 
 
 # ---------------------------------------------------------------------------
+# HelpSteer2 formatter
+# ---------------------------------------------------------------------------
+
+
+def _format_helpsteer2(example: Dict[str, Any], tokenizer, format_kwargs: Optional[Dict[str, Any]] = None) -> Dict[str, str]:
+    """Format HelpSteer2 preference pairs."""
+    format_kwargs = format_kwargs or {}
+    prompt_key = format_kwargs.get("prompt_key", "prompt")
+    chosen_key = format_kwargs.get("chosen_key", "chosen")
+    rejected_key = format_kwargs.get("rejected_key", "rejected")
+
+    if prompt_key not in example:
+        raise KeyError(f"HelpSteer2 example missing '{prompt_key}' column.")
+    if chosen_key not in example or rejected_key not in example:
+        raise KeyError(
+            f"HelpSteer2 example missing '{chosen_key}' and/or '{rejected_key}' columns. "
+            "Use a preference-paired variant (e.g., nvidia/HelpSteer2-Preference) or preprocess pairs."
+        )
+
+    prompt_text = tokenizer.apply_chat_template(
+        [{"role": "user", "content": example[prompt_key]}],
+        tokenize=False,
+        add_generation_prompt=True,
+    )
+
+    return {
+        "prompt": prompt_text,
+        "chosen": example[chosen_key],
+        "rejected": example[rejected_key],
+    }
+
+
+# ---------------------------------------------------------------------------
 # Loader registry
 # ---------------------------------------------------------------------------
 
@@ -167,6 +200,10 @@ FORMATTERS = {
     "sycophancy": {
         "default_path": "nala/sycophancy",
         "formatter": _format_sycophancy,
+    },
+    "helpsteer2": {
+        "default_path": "nvidia/HelpSteer2-Preference",
+        "formatter": _format_helpsteer2,
     },
 }
 
