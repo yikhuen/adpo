@@ -1,6 +1,15 @@
 from __future__ import annotations
 
-# ruff: noqa: E402  # importer order is intentional to load unsloth before transformers
+# Ensure Unsloth patches transformers before we import heavy deps like torch/AutoModel.
+try:  # pragma: no cover - optional GPU dependency
+    from unsloth import FastLanguageModel as _FastLanguageModel  # type: ignore
+except Exception as exc:  # pragma: no cover - best effort on CPU CI
+    _UNSLOTH_IMPORT_ERROR: Optional[Exception] = exc  # type: ignore[assignment]
+    FastLanguageModel = None
+else:
+    FastLanguageModel = _FastLanguageModel  # type: ignore
+    _UNSLOTH_IMPORT_ERROR = None
+
 import json
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -15,16 +24,6 @@ try:  # pragma: no cover - optional dependency for tests
 except Exception:  # pragma: no cover - fall back to mocks
     AutoModelForCausalLM = None  # type: ignore[assignment]
     AutoTokenizer = None  # type: ignore[assignment]
-
-FastLanguageModel = None
-_UNSLOTH_IMPORT_ERROR: Optional[Exception] = None
-
-try:  # pragma: no cover - optional GPU dependency
-    from unsloth import FastLanguageModel as _FastLanguageModel  # type: ignore
-except Exception as exc:  # pragma: no cover - best effort on CPU CI
-    _UNSLOTH_IMPORT_ERROR = exc
-else:
-    FastLanguageModel = _FastLanguageModel  # type: ignore
 
 from adaptive_dpo.modeling import load_qwen25_7b_base
 from adaptive_dpo.utils.generate import generate_batch

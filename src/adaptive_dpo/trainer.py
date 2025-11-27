@@ -454,7 +454,7 @@ class LoggingDPOTrainer(DPOTrainer):
                 per_sample_kl = None
 
         self._log_metrics(kl_batch, policy_logits=policy_logits)
-        self._log_high_kl_samples(decode_ids, per_sample_kl)
+        _log_high_kl_samples(self, decode_ids, per_sample_kl)
 
         if return_outputs:
             return loss, metrics
@@ -508,40 +508,40 @@ class AdaptiveDPOTrainer(LoggingDPOTrainer):
         self.beta = old_beta
         controller_state = self.beta_controller.state() if self.is_world_process_zero() else None
         self._log_metrics(kl_batch, controller_state=controller_state, policy_logits=policy_logits)
-        self._log_high_kl_samples(decode_ids, per_sample_kl)
+        _log_high_kl_samples(self, decode_ids, per_sample_kl)
         return loss_to_return
 
-    def _log_high_kl_samples(
-        self,
-        input_ids: Optional[torch.Tensor],
-        per_sample_kl: Optional[torch.Tensor],
-    ) -> None:
-        threshold = self._high_kl_threshold
-        if threshold is None or input_ids is None or per_sample_kl is None:
-            return
-        if not self.is_world_process_zero():
-            return
+def _log_high_kl_samples(
+    trainer: LoggingDPOTrainer,
+    input_ids: Optional[torch.Tensor],
+    per_sample_kl: Optional[torch.Tensor],
+) -> None:
+    threshold = getattr(trainer, "_high_kl_threshold", None)
+    if threshold is None or input_ids is None or per_sample_kl is None:
+        return
+    if not trainer.is_world_process_zero():
+        return
 
-        kl_cpu = per_sample_kl.detach().float().cpu()
-        high_idx = (kl_cpu >= threshold).nonzero(as_tuple=False).flatten()
-        if high_idx.numel() == 0:
-            return
+    kl_cpu = per_sample_kl.detach().float().cpu()
+    high_idx = (kl_cpu >= threshold).nonzero(as_tuple=False).flatten()
+    if high_idx.numel() == 0:
+        return
 
-        ids_cpu = input_ids.detach().cpu()
-        step = int(getattr(self.state, "global_step", 0))
-        rows = []
-        for idx in high_idx.tolist():
-            sample_ids = ids_cpu[idx]
-            text = self.tokenizer.decode(sample_ids.tolist(), skip_special_tokens=True)
-            rows.append([step, float(kl_cpu[idx].item()), text[:1000]])
+    ids_cpu = input_ids.detach().cpu()
+    step = int(getattr(trainer.state, "global_step", 0))
+    rows = []
+    for idx in high_idx.tolist():
+        sample_ids = ids_cpu[idx]
+        text = trainer.tokenizer.decode(sample_ids.tolist(), skip_special_tokens=True)
+        rows.append([step, float(kl_cpu[idx].item()), text[:1000]])
 
-        try:
-            import wandb
+    try:
+        import wandb
 
-            table = wandb.Table(columns=["Step", "KL_Value", "Text_Snippet"], data=rows)
-            wandb.log({"investigation/high_kl_samples": table}, step=step)
-        except Exception:
-            pass
+        table = wandb.Table(columns=["Step", "KL_Value", "Text_Snippet"], data=rows)
+        wandb.log({"investigation/high_kl_samples": table}, step=step)
+    except Exception:
+        pass
 
-        for _, kl_value, snippet in rows:
-            logger.info("KL spike at step %s: KL=%.4f :: %s", step, kl_value, snippet[:120])
+    for _, kl_value, snippet in rows:
+        logger.info("KL spike at step %s: KL=%.4f :: %s", step, kl_value, snippet[:120])
