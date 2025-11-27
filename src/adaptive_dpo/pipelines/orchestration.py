@@ -338,6 +338,7 @@ def run_phase1(
             eval_cmd = [
                 sys.executable,
                 "scripts/eval.py",
+                "all-judges",
                 "--config",
                 str(eval_cfg_path),
             ]
