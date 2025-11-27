@@ -239,7 +239,6 @@ def _train_single_run(cfg: Dict[str, Any], seed: int, run_idx: int, total_runs: 
     controller = artifacts.controller
     tokenizer = artifacts.tokenizer
     schedule_cfg = artifacts.schedule_cfg
-    tr_cfg = artifacts.trainer_cfg
 
     start_time = time.time()
     trainer.train()
