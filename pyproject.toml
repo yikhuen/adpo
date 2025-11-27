@@ -20,3 +20,6 @@ dev = ["pytest", "ruff"]
 package-dir = {"" = "src"}
 packages = {find = {where = ["src"], include = ["adaptive_dpo", "adaptive_dpo.*"]}}
 
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+
