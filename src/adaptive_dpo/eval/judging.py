@@ -5,7 +5,11 @@ import os
 import time
 from typing import Any, Dict, List, Optional, Protocol
 
-DEFAULT_PROMPT_TEMPLATE = "Prompt:\n{prompt}\n\nResponse A:\n{a}\n\nResponse B:\n{b}\n\nWhich is better? Reply with only A or B."
+import requests
+
+DEFAULT_PROMPT_TEMPLATE = (
+    "Prompt:\n{prompt}\n\nResponse A:\n{a}\n\nResponse B:\n{b}\n\nWhich is better? Reply with only A or B."
+)
 
 
 def _lazy_import_openai():
@@ -75,23 +79,6 @@ class _OpenAIBackend:
                 raise
 
 
-class _GeminiBackend:
-    def __init__(self, *, client, temperature: float, max_tokens: int):
-        self.client = client
-        self.temperature = temperature
-        self.max_tokens = max_tokens
-
-    def generate(self, formatted_prompt: str) -> str:
-        response = self.client.generate_content(formatted_prompt)
-        text = getattr(response, "text", "") or ""
-        if not text and getattr(response, "candidates", None):
-            try:
-                text = response.candidates[0].content.parts[0].text
-            except (IndexError, AttributeError):
-                text = ""
-        return text
-
-
 class _HFCausalBackend:
     def __init__(self, *, model_name: str, temperature: float, max_tokens: int):
         transformers = _lazy_import_transformers()
@@ -123,6 +110,56 @@ class _HFCausalBackend:
             )
         generated = outputs[0][inputs.input_ids.shape[1] :]
         return self.tokenizer.decode(generated, skip_special_tokens=True)
+
+
+class _OpenRouterBackend:
+    API_URL = "https://openrouter.ai/api/v1/chat/completions"
+
+    def __init__(
+        self,
+        *,
+        api_key: str,
+        model_name: str,
+        temperature: float,
+        max_tokens: int,
+        system_prompt: Optional[str],
+        default_system_prompt: str,
+        timeout: float,
+    ):
+        self.api_key = api_key
+        self.model_name = model_name
+        self.temperature = temperature
+        self.max_tokens = max_tokens
+        self.system_prompt = system_prompt or default_system_prompt
+        self.timeout = timeout
+
+    def generate(self, formatted_prompt: str) -> str:
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
+        }
+        messages = [
+            {"role": "system", "content": self.system_prompt},
+            {"role": "user", "content": formatted_prompt},
+        ]
+        payload = {
+            "model": self.model_name,
+            "messages": messages,
+            "temperature": self.temperature,
+            "max_tokens": self.max_tokens,
+        }
+        response = requests.post(
+            self.API_URL,
+            json=payload,
+            headers=headers,
+            timeout=self.timeout,
+        )
+        response.raise_for_status()
+        data = response.json()
+        choices = data.get("choices") or []
+        if not choices:
+            raise RuntimeError("OpenRouter response contained no choices.")
+        return choices[0]["message"]["content"] or ""
 
 
 class PairwiseJudge:
@@ -159,28 +196,7 @@ class PairwiseJudge:
                 max_attempts=max_retries,
             )
         if self.provider == "gemini":
-            try:
-                import google.generativeai as genai
-            except ImportError as exc:  # pragma: no cover
-                raise RuntimeError("google-generativeai must be installed for Gemini judges.") from exc
-
-            api_key = cfg.get("api_key") or os.environ.get("GEMINI_API_KEY")
-            if not api_key:
-                raise RuntimeError("GEMINI_API_KEY not set for Gemini judge.")
-
-            genai.configure(api_key=api_key)
-            model_name = self.model_name or cfg.get("model") or "gemini-2.0-flash-001"
-            if model_name.startswith("models/"):
-                model_name = model_name[7:]
-            generation_config = cfg.get("generation_config")
-            safety_settings = cfg.get("safety_settings")
-            init_kwargs: Dict[str, Any] = {}
-            if generation_config:
-                init_kwargs["generation_config"] = generation_config
-            if safety_settings:
-                init_kwargs["safety_settings"] = safety_settings
-            client = genai.GenerativeModel(model_name, **init_kwargs)
-            return _GeminiBackend(client=client, temperature=self.temperature, max_tokens=self.max_tokens)
+            raise RuntimeError("Gemini provider has been removed. Use provider='openrouter' instead.")
         if self.provider == "hf_causal":
             if not self.model_name:
                 raise ValueError("hf_causal judge requires 'model' identifier.")
@@ -188,6 +204,21 @@ class PairwiseJudge:
                 model_name=self.model_name,
                 temperature=self.temperature,
                 max_tokens=self.max_tokens,
+            )
+        if self.provider == "openrouter":
+            api_key = cfg.get("api_key") or os.environ.get("OPENROUTER_API_KEY")
+            if not api_key:
+                raise RuntimeError("OPENROUTER_API_KEY not set for OpenRouter judge.")
+            timeout = float(cfg.get("timeout", 120.0))
+            model_name = self.model_name or cfg.get("model") or "google/gemini-2.0-flash-001"
+            return _OpenRouterBackend(
+                api_key=api_key,
+                model_name=model_name,
+                temperature=self.temperature,
+                max_tokens=self.max_tokens,
+                system_prompt=self.system_prompt,
+                default_system_prompt=DEFAULT_PROMPT_TEMPLATE,
+                timeout=timeout,
             )
         raise ValueError(f"Unsupported judge provider '{self.provider}'.")
 

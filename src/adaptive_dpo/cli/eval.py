@@ -9,7 +9,7 @@ from adaptive_dpo.eval.runner import run_evaluation
 
 DEFAULT_ALL_JUDGES_CONFIG = Path("configs/eval/judge_gpt4o_mini.yaml")
 DEFAULT_OPENAI_ONLY_CONFIG = Path("configs/eval/judge_openai_only.yaml")
-DEFAULT_GEMINI_ONLY_CONFIG = Path("configs/eval/judge_gemini_only.yaml")
+DEFAULT_OPENROUTER_ONLY_CONFIG = Path("configs/eval/judge_openrouter_only.yaml")
 
 app = typer.Typer(help="Evaluate preference models with multiple judges and export metrics.")
 
@@ -45,13 +45,13 @@ def run_openai_judge(
     _run(config, limit, force_generate, force_judge)
 
 
-@app.command("gemini-judge")
-def run_gemini_judge(
+@app.command("openrouter-judge")
+def run_openrouter_judge(
     config: Path = typer.Option(
-        DEFAULT_GEMINI_ONLY_CONFIG,
+        DEFAULT_OPENROUTER_ONLY_CONFIG,
         "--config",
         "-c",
-        help="Path to a Gemini-only eval config.",
+        help="Path to an OpenRouter-only eval config.",
         show_default=False,
     ),
     limit: Optional[int] = typer.Option(None, help="Override prompt limit from config."),

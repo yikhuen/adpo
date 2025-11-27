@@ -77,7 +77,7 @@ Together, the telemetry CSVs, reward logs, and eval artefacts in `eval_results/`
 1. **Hypothesis validated:** Adaptive β keeps KL near target, spikes only when entropy is high, and converts those spikes into higher win rates without increasing flip rates.
 2. **Robustness observed:** Phase traces, entropy stats, and positive margin trends show the controller refines priors rather than overwriting them.
 3. **Action items:**
-   - Run Gemini and multi-seed judge evaluations, then refresh `model_results.csv` via `scripts/summarize_eval_runs.py`.
+   - Run OpenRouter (Gemini 2.0 Flash) and multi-seed judge evaluations, then refresh `model_results.csv` via `scripts/summarize_eval_runs.py`.
    - Populate the entropy-bucket and flip-rate summary tables once the ≥400-prompt sweeps finish.
    - Expand the qualitative appendix with diverse safety-critical wins/losses for reviewers.
 

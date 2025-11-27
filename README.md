@@ -22,7 +22,7 @@ Environment variables (set in your shell or `.env`):
 export WANDB_API_KEY=...
 export WANDB_PROJECT=adaptive-dpo
 export OPENAI_API_KEY=...
-export GEMINI_API_KEY=...
+export OPENROUTER_API_KEY=...
 ```
 
 See [`docs/config.md`](docs/config.md) for training/eval/orchestration config schemas.
@@ -42,12 +42,13 @@ This calls `adaptive_dpo.cli.train`, which delegates to `adaptive_dpo.pipelines.
 ## Evaluation
 
 ```bash
-# Combined GPT-4o-mini + Gemini judges
+# Combined GPT-4o-mini + OpenRouter Gemini judges
 python scripts/eval.py all-judges --config configs/eval/judge_gpt4o_mini.yaml --force-judge
 
 # Shortcuts
 python scripts/eval.py openai-judge  --config configs/eval/judge_openai_only.yaml
-python scripts/eval.py gemini-judge  --config configs/eval/judge_gemini_only.yaml
+python scripts/eval.py openrouter-judge --config configs/eval/judge_openrouter_only.yaml
+# For a lightweight sanity check (OpenAI only) you can reuse configs/eval/judge_phase1.yaml
 python scripts/eval.py all-judges    --config configs/eval/judge_phase1.yaml  # Phase 1 template (candidate vs base)
 ```
 
@@ -57,7 +58,7 @@ The evaluation stack (`adaptive_dpo.eval.*`) splits responsibilities:
 | --- | --- |
 | `prompts.py` | Prompt loading, shuffling, overrides |
 | `generation.py` | Model loading + cache-aware generation |
-| `judging.py` | Pairwise judge drivers (OpenAI, Gemini, HF causal) |
+| `judging.py` | Pairwise judge drivers (OpenAI, OpenRouter, HF causal) |
 | `metrics.py` | Win-rate computation, agreement stats |
 | `logging.py` | WandB logging, artifact bundling |
 | `runner.py` | High-level orchestration (`run_evaluation`) |
@@ -90,14 +91,14 @@ python scripts/orchestrate.py phase4 \
 
 Highlights:
 
-- Phase 1 now evaluates every β candidate (OpenAI + Gemini) and records the best pick inside `research/results/phase1_fixed_beta_grid/phase1_results.json`.
+- Phase 1 now evaluates every β candidate (OpenAI + OpenRouter Gemini) and records the best pick inside `research/results/phase1_fixed_beta_grid/phase1_results.json`.
 - Phase 2 automatically runs `scripts/run_eval_with_diagnostics.py` (controller plots, entropy buckets, flip-rate checks) and generates `results/phase2_report_latest.md` via `scripts/report_phase2.py`.
 - Phase 3 triggers evaluations for each ablation, stores per-variant metrics, and emits `phase3/ablation_win_rates.png` using `scripts/plot_ablation_bar.py`.
 - Phase 4 accepts dataset specs of the form `name=alias:<formatter>` or `name=config:<yaml>`; prompts are materialised with `scripts/prepare_dev_set.py` before running the sweep.
 
 ### Typical Repository Workflow
 
-1. **Bootstrap the workspace.** Follow the _Quick Start_ section, export API keys (`OPENAI_API_KEY`, `GEMINI_API_KEY`, `WANDB_API_KEY`), and run `pytest` to ensure the environment is healthy.
+1. **Bootstrap the workspace.** Follow the _Quick Start_ section, export API keys (`OPENAI_API_KEY`, `OPENROUTER_API_KEY`, `WANDB_API_KEY`), and run `pytest` to ensure the environment is healthy.
 2. **Phase 1 – fixed β sweep.**  
    ```bash
    python scripts/orchestrate.py phase1 \
@@ -111,7 +112,7 @@ Highlights:
    ```
    This run:
    - Trains adaptive/annealed/fixed controllers.
-   - Reuses `configs/eval/judge_gpt4o_mini.yaml` with GPT‑4o-mini + Gemini judges.
+   - Reuses `configs/eval/judge_gpt4o_mini.yaml` with GPT‑4o-mini + OpenRouter Gemini judges.
    - Launches diagnostics (phase traces, entropy buckets, flip-rate) under `research/results/phase2_adaptive_vs_baselines/diagnostics`.
    - Writes a Markdown summary to `results/phase2_report_latest.md`.
 4. **Phase 3 – controller ablations.**

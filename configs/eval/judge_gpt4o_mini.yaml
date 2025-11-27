@@ -45,8 +45,8 @@ judges:
       concise, and safe. Prefer factual, on-topic, and non-toxic content.
       Reply with only "A" or "B".
   - name: secondary
-    provider: gemini
-    model: gemini-2.0-flash-001
+    provider: openrouter
+    model: google/gemini-2.0-flash-001
     max_tokens: 64
     temperature: 0.0
     system_prompt: |

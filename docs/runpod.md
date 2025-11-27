@@ -56,7 +56,7 @@ Create locally:
 WANDB_API_KEY=YOUR_WANDB_KEY
 WANDB_PROJECT=adaptive-dpo
 OPENAI_API_KEY=YOUR_OPENAI_KEY
-GEMINI_API_KEY=YOUR_GEMINI_KEY
+OPENROUTER_API_KEY=YOUR_OPENROUTER_KEY
 HF_HUB_ENABLE_HF_TRANSFER=1
 HF_DATASETS_DISABLE_MULTIPROCESSING=1
 PYTHONHASHSEED=42
@@ -110,7 +110,7 @@ Outputs land under `outputs/...` with LoRA adapters + `train_stats.json`.
 
 ```bash
 python scripts/eval.py openai-judge --force-judge
-python scripts/eval.py gemini-judge --force-judge
+python scripts/eval.py openrouter-judge --force-judge
 python scripts/eval.py all-judges --force-judge
 ```
 

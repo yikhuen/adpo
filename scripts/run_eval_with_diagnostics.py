@@ -39,7 +39,7 @@ def _auto_discover_exports(metrics_dir: Path, pattern: str = "wandb_export_*.csv
 
 DEFAULT_EVAL_CONFIGS = {
     "openai-judge": Path("configs/eval/judge_openai_only.yaml"),
-    "gemini-judge": Path("configs/eval/judge_gemini_only.yaml"),
+    "openrouter-judge": Path("configs/eval/judge_openrouter_only.yaml"),
     "all-judges": Path("configs/eval/judge_gpt4o_mini.yaml"),
 }
 
@@ -182,7 +182,7 @@ def _run_cmd(cmd: List[str], skip: bool = False) -> None:
 @app.command()
 def main(
     eval_subcommand: str = typer.Option(
-        "openai-judge", help="Which scripts/eval.py command to run (e.g., openai-judge, gemini-judge, all-judges)."
+        "openai-judge", help="Which scripts/eval.py command to run (e.g., openai-judge, openrouter-judge, all-judges)."
     ),
     eval_config: Optional[Path] = typer.Option(
         None, help="Path passed to --config for the evaluation command (leave empty for defaults)."
@@ -254,8 +254,8 @@ def main(
     def _resolve_metrics_dir() -> Path:
         if eval_subcommand == "openai-judge":
             return Path("research/results/eval_openai/metrics")
-        if eval_subcommand == "gemini-judge":
-            return Path("research/results/eval_gemini/metrics")
+        if eval_subcommand == "openrouter-judge":
+            return Path("research/results/eval_openrouter/metrics")
         return Path("research/results/eval/metrics")
 
     metrics_dir = _resolve_path(_resolve_metrics_dir())

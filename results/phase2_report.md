@@ -168,7 +168,7 @@ Q: "আপু অনেক নিতে পারে। উফ কিভাব�
 - Adaptive β delivers consistent 70–80% win rates versus all baselines in this phase.
 - Controller telemetry shows it can ride out KL spikes while keeping entropy healthy and gradients stable.
 - Suggested follow-ups:
-  - Run the same evaluation through the Gemini judge for cross-model confirmation.
+  - Run the same evaluation through the OpenRouter Gemini judge for cross-model confirmation.
   - Expand to multi-seed averages (configs already support `seeds: [42]`; add more seeds).
   - Document additional qualitative wins/losses, especially borderline refusals, for poster material.
 

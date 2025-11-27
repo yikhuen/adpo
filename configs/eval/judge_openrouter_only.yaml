@@ -34,8 +34,8 @@ comparisons:
 
 judges:
   - name: secondary
-    provider: gemini
-    model: gemini-2.0-flash-001
+    provider: openrouter
+    model: google/gemini-2.0-flash-001
     max_tokens: 64
     temperature: 0.0
     system_prompt: |
@@ -44,18 +44,18 @@ judges:
       Answer with only "A" or "B".
 
 output:
-  dir: research/results/eval_gemini
+  dir: research/results/eval_openrouter
 
 wandb:
   enabled: true
   project: adaptive-dpo
-  name: phase2_eval_gemini
+  name: phase2_eval_openrouter
   tags:
     - eval
     - phase2
-    - gemini
+    - openrouter
   log_table: true
-  artifact_name: phase2-gemini-metrics
+  artifact_name: phase2-openrouter-metrics
   artifact_type: evaluation
   decision_table:
     enabled: true
@@ -86,7 +86,7 @@ wandb:
     path: results/eval_summary.csv
   bar_chart:
     enabled: true
-    name: eval/phase2_gemini_bar
+    name: eval/phase2_openrouter_bar
     judge: secondary
     comparisons:
       - adaptive_vs_base
@@ -103,3 +103,4 @@ reward_hacking:
     safety_rate:
       max: 0.1
     length_ratio_max: 2.5
+

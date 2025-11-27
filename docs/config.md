@@ -87,8 +87,8 @@ judges:
     temperature: 0.0
     max_tokens: 64
   - name: secondary
-    provider: gemini
-    model: gemini-2.0-flash-001
+    provider: openrouter
+    model: google/gemini-2.0-flash-001
 
 output:
   dir: research/results/eval
@@ -103,7 +103,7 @@ Highlights:
 
 - `models.*`: `kind` ∈ {`lora`, `base`, `hf`}. HF models require `model: <hf_id>`.
 - `comparisons`: `a`/`b` must reference names from `models`.
-- `judges.provider`: `openai`, `gemini`, or `hf_causal`.
+- `judges.provider`: `openai`, `openrouter`, or `hf_causal`.
 - `generation.cache`: disable to force regeneration per run.
 - [`configs/eval/judge_phase1.yaml`](../configs/eval/judge_phase1.yaml) is a minimal template (candidate vs base) used by the Phase 1 + Phase 3 orchestration flows; the model slot named `candidate` is overwritten with every checkpoint before calling `scripts/eval.py all-judges ...`.
 
