@@ -18,4 +18,5 @@ dev = ["pytest", "ruff"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
+include = ["adaptive_dpo*"]
 
