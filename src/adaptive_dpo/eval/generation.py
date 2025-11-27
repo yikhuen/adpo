@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+# ruff: noqa: E402  # importer order is intentional to load unsloth before transformers
 import json
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
