@@ -37,6 +37,18 @@ def _clip(text: Optional[str], limit: int = 480) -> str:
     return text
 
 
+def _sanitize_for_json_mode(text: str) -> str:
+    """
+    Remove tokens that OpenAI JSON mode rejects (e.g. <|assistant|>).
+    Replaces problematic substrings with visually similar placeholders.
+    """
+    if not text:
+        return ""
+    sanitized = text.replace("<|", "⟨|").replace("|>", "|⟩")
+    sanitized = sanitized.replace("\u0000", " ")
+    return sanitized
+
+
 def _load_jsonl(path: Path) -> List[Dict[str, str]]:
     records: List[Dict[str, str]] = []
     if not path.exists():
@@ -114,9 +126,9 @@ def _analyze_chunk(
         simplified.append(
             {
                 "record_id": record["_record_id"],
-                "prompt_excerpt": _clip(record.get("prompt"), 360),
-                "response_a_excerpt": _clip(record.get("response_a"), 360),
-                "response_b_excerpt": _clip(record.get("response_b"), 360),
+                "prompt_excerpt": _clip(_sanitize_for_json_mode(record.get("prompt", "")), 360),
+                "response_a_excerpt": _clip(_sanitize_for_json_mode(record.get("response_a", "")), 360),
+                "response_b_excerpt": _clip(_sanitize_for_json_mode(record.get("response_b", "")), 360),
                 "choice": record.get("choice", ""),
             }
         )
