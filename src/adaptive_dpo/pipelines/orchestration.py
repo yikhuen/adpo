@@ -789,6 +789,7 @@ def run_phase4(
             cmd = [
                 sys.executable,
                 "scripts/eval.py",
+                "all-judges",
                 "--config",
                 str(config_path),
             ]
