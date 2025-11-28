@@ -11,6 +11,8 @@ from typing import Any, Dict, List, Optional
 
 import typer
 
+from adaptive_dpo.reporting.highlights import curate_highlights, highlights_to_markdown
+
 app = typer.Typer(add_completion=False, help="Summarize Phase 2 results into a Markdown report.")
 
 
@@ -172,6 +174,14 @@ def main(
         None,
         help="Optional diagnostics directory to reference (controller plots, entropy, flip-rate).",
     ),
+    llm_model: Optional[str] = typer.Option(
+        "gpt-5-mini",
+        help="OpenAI model to curate qualitative highlights ('none' to skip).",
+    ),
+    llm_max_examples: int = typer.Option(
+        4,
+        help="Maximum number of LLM-curated qualitative highlights.",
+    ),
 ):
     phase_dir = phase_dir.resolve()
     eval_output = eval_output.resolve()
@@ -199,6 +209,23 @@ def main(
 
     lines.append("## Qualitative Samples")
     lines.extend(_format_samples(samples))
+
+    if llm_model and llm_model.lower() != "none":
+        try:
+            highlights = curate_highlights(
+                decisions_dir,
+                metrics,
+                model=llm_model,
+                max_examples=llm_max_examples,
+            )
+            lines.extend(highlights_to_markdown(highlights))
+        except Exception as exc:  # pragma: no cover - network reliant
+            typer.echo(f"[report] LLM highlight generation failed: {exc}")
+            lines.extend(highlights_to_markdown([], heading="## LLM-Curated Highlights"))
+            lines.append(f"_LLM generation failed: {exc}_")
+            lines.append("")
+    else:
+        lines.extend(highlights_to_markdown([], heading="## LLM-Curated Highlights"))
 
     lines.append("## Diagnostics")
     if diagnostics_dir:

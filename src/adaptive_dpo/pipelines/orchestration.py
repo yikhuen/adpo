@@ -723,6 +723,7 @@ def run_phase4(
     dataset_prompt_size: int,
     dataset_split: str,
     dataset_tokenizer: str,
+    report_output: Optional[Path],
 ) -> None:
     base_cfg = _load_yaml(eval_config)
     phase_dir = _phase_output_dir("phase4_generalization")
@@ -801,6 +802,18 @@ def run_phase4(
         summary_root = phase_dir / "summary.json"
         with summary_root.open("w", encoding="utf-8") as f:
             json.dump(dataset_metrics, f, indent=2)
+
+    if report_output:
+        resolved_report = report_output if report_output.is_absolute() else _REPO_ROOT / report_output
+        report_cmd = [
+            sys.executable,
+            "scripts/report_phase4.py",
+            "--phase-dir",
+            str(phase_dir),
+            "--output",
+            str(resolved_report),
+        ]
+        subprocess.run(report_cmd, check=True, cwd=_REPO_ROOT)
 
 
 __all__ = [

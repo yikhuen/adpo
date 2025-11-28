@@ -95,6 +95,7 @@ Highlights:
 - Phase 2 automatically runs `scripts/run_eval_with_diagnostics.py` (controller plots, entropy buckets, flip-rate checks) and generates `results/phase2_report_latest.md` via `scripts/report_phase2.py`.
 - Phase 3 triggers evaluations for each ablation, stores per-variant metrics, and emits `phase3/ablation_win_rates.png` using `scripts/plot_ablation_bar.py`.
 - Phase 4 accepts dataset specs of the form `name=alias:<formatter>` or `name=config:<yaml>`; prompts are materialised with `scripts/prepare_dev_set.py` before running the sweep.
+- Phase 2 and Phase 4 reports now append GPT-5-mini curated qualitative highlights (set `--llm-model none` on the report scripts to disable).
 
 ### Typical Repository Workflow
 
@@ -130,6 +131,7 @@ Highlights:
      --model adaptive=kind:lora,checkpoint:outputs/adaptive_beta/checkpoint-120
    ```
    Metrics per dataset are stored in `research/results/phase4_generalization/<dataset>/metrics/` and summarised in `research/results/phase4_generalization/summary.json`.
+   The Markdown report (target `results/phase4_report_latest.md` by default) will also include the LLM-curated highlights.
 6. **Ad-hoc training/eval.** `scripts/train.py` and `scripts/eval.py` remain available for standalone experiments (e.g., debugging a new dataset formatter).
 7. **Reporting.** Beside Phase 2’s Markdown, you can re-run `scripts/report_phase2.py --phase-dir ... --eval-output ...` or extend it for other phases to keep artifacts reproducible.
 

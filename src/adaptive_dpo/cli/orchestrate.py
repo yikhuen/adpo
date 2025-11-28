@@ -196,6 +196,10 @@ def phase4(
         "Qwen/Qwen2.5-7B-Instruct",
         help="Tokenizer used when formatting prompts via scripts/prepare_dev_set.py.",
     ),
+    report_output: Path = typer.Option(
+        Path("results/phase4_report_latest.md"),
+        help="Markdown file to write the Phase 4 summary report.",
+    ),
 ):
     run_phase4(
         eval_config,
@@ -205,6 +209,7 @@ def phase4(
         dataset_prompt_size,
         dataset_split,
         dataset_tokenizer,
+        report_output,
     )
 
 
