@@ -43,7 +43,11 @@ def load_preference_dataset(
         raise ValueError(f"Unsupported dataset alias '{alias}'. Supported aliases: {', '.join(FORMATTERS.keys())}.")
 
     formatter_entry = FORMATTERS[alias]
-    dataset_path = cfg.get("path", formatter_entry["default_path"])
+    # Allow callers to include an explicit `path=None` so we still fall back to the
+    # formatter default (the orchestration helpers do this when aliases are passed).
+    dataset_path = cfg.get("path")
+    if not dataset_path:
+        dataset_path = formatter_entry["default_path"]
     splits_cfg = cfg.get("splits") or {"train": "train"}
     if not isinstance(splits_cfg, dict):
         raise TypeError("cfg['splits'] must be a mapping of output split name to dataset split string.")
