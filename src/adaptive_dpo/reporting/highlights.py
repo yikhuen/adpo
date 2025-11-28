@@ -90,7 +90,7 @@ def _chat_completion(messages: List[Dict[str, str]], model: str, max_output_toke
     response = client.chat.completions.create(
         model=model,
         temperature=0.2,
-        max_tokens=max_output_tokens,
+        max_completion_tokens=max_output_tokens,
         messages=messages,
     )
     return response.choices[0].message.content or ""
