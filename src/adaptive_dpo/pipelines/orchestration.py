@@ -753,10 +753,17 @@ def run_phase4(
     dataset_metrics: Dict[str, Dict[str, Any]] = {}
 
     dataset_entries = list(dataset_specs)
+    def _dataset_progress_label(item: Optional[Tuple[str, str]]) -> str:
+        if not item:
+            return ""
+        if isinstance(item, (list, tuple)) and item:
+            return str(item[0])
+        return str(item)
+
     with typer.progressbar(
         dataset_entries,
         label="Phase 4 datasets",
-        item_show_func=lambda item: str(item[0]),
+        item_show_func=_dataset_progress_label,
     ) as progress_iter:
         for dataset_label, dataset_path in progress_iter:
             cfg = copy.deepcopy(base_cfg)
