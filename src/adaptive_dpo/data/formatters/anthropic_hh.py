@@ -6,7 +6,9 @@ from typing import Any, Dict, List, Optional
 from .utils import apply_chat_prompt
 
 DEFAULT_PATH = "Anthropic/hh-rlhf"
-TURN_PATTERN = re.compile(r"(human|assistant):", re.IGNORECASE)
+# Anchor speaker tags to the beginning of a line so inline strings like
+# "Assistant: Human: ..." do not create spurious turns.
+TURN_PATTERN = re.compile(r"^[ \t]*(human|assistant):", re.IGNORECASE | re.MULTILINE)
 
 
 def _parse_conversation(text: str) -> List[Dict[str, str]]:
