@@ -607,85 +607,91 @@ def run_phase3(
         "no_fast_loop": {"lambda_entropy": 0.0},
     }
 
-    for variant in ablations:
-        cfg = copy.deepcopy(base_cfg)
-        overrides = cfg.setdefault("beta_controller", {})
-        label = variant
-        if variant not in variant_overrides and variant != "full":
-            raise typer.BadParameter(f"Unknown ablation variant '{variant}'.")
+    ablation_variants = list(ablations)
+    with typer.progressbar(
+        ablation_variants,
+        label="Phase 3 ablations",
+        item_show_func=lambda variant: str(variant),
+    ) as progress_iter:
+        for variant in progress_iter:
+            cfg = copy.deepcopy(base_cfg)
+            overrides = cfg.setdefault("beta_controller", {})
+            label = variant
+            if variant not in variant_overrides and variant != "full":
+                raise typer.BadParameter(f"Unknown ablation variant '{variant}'.")
 
-        variant_values = variant_overrides.get(variant)
-        if variant_values:
-            overrides.update(variant_values)
+            variant_values = variant_overrides.get(variant)
+            if variant_values:
+                overrides.update(variant_values)
 
-        run_output = Path(cfg["trainer"].get("output_dir", "outputs/adaptive_beta")) / f"ablation_{label}"
-        cfg["trainer"]["output_dir"] = str(run_output)
-        cfg["seed"] = cfg.get("seed", 42)
-        cfg["seeds"] = cfg.get("seeds", [cfg["seed"]])
+            run_output = Path(cfg["trainer"].get("output_dir", "outputs/adaptive_beta")) / f"ablation_{label}"
+            cfg["trainer"]["output_dir"] = str(run_output)
+            cfg["seed"] = cfg.get("seed", 42)
+            cfg["seeds"] = cfg.get("seeds", [cfg["seed"]])
 
-        job = PhaseTrainingJob(
-            label=f"ablation_{label}",
-            config=cfg,
-            output_dir=run_output,
-            config_filename=f"phase3_{label}.yaml",
-        )
-        _run_training_job(job, phase_dir / job.label)
+            job = PhaseTrainingJob(
+                label=f"ablation_{label}",
+                config=cfg,
+                output_dir=run_output,
+                config_filename=f"phase3_{label}.yaml",
+            )
+            _run_training_job(job, phase_dir / job.label)
 
-        run_output_path = _resolve_path(job.output_dir)
+            run_output_path = _resolve_path(job.output_dir)
 
-        if plot_phase_traces:
-            phase_trace_path = run_output_path / "phase_trace.json"
-            if phase_trace_path.exists():
-                trace_dir = phase_dir / "phase_traces" / job.label
-                trace_dir.mkdir(parents=True, exist_ok=True)
-                trace_cmd = [
+            if plot_phase_traces:
+                phase_trace_path = run_output_path / "phase_trace.json"
+                if phase_trace_path.exists():
+                    trace_dir = phase_dir / "phase_traces" / job.label
+                    trace_dir.mkdir(parents=True, exist_ok=True)
+                    trace_cmd = [
+                        sys.executable,
+                        "scripts/plot_phase_trace.py",
+                        "--phase-trace",
+                        str(phase_trace_path),
+                        "--output-dir",
+                        str(trace_dir),
+                        "--run-label",
+                        job.label,
+                    ]
+                    subprocess.run(trace_cmd, check=True, cwd=_REPO_ROOT)
+
+            if eval_cfg_template:
+                eval_cfg = copy.deepcopy(eval_cfg_template)
+                eval_output_dir = phase_dir / "evaluation" / job.label
+                eval_cfg.setdefault("output", {})
+                eval_cfg["output"]["dir"] = str(eval_output_dir)
+                models = eval_cfg.get("models") or {}
+                if eval_model_slot not in models:
+                    raise typer.BadParameter(
+                        f"Eval config is missing model slot '{eval_model_slot}' required for Phase 3."
+                    )
+                models[eval_model_slot]["checkpoint"] = str(run_output_path)
+                _validate_comparisons_models(eval_cfg)
+                eval_cfg_path = _write_config(eval_cfg, f"phase3_eval_{job.label}.yaml")
+                eval_cmd = [
                     sys.executable,
-                    "scripts/plot_phase_trace.py",
-                    "--phase-trace",
-                    str(phase_trace_path),
-                    "--output-dir",
-                    str(trace_dir),
-                    "--run-label",
-                    job.label,
+                    "scripts/eval.py",
+                    "all-judges",
+                    "--config",
+                    str(eval_cfg_path),
                 ]
-                subprocess.run(trace_cmd, check=True, cwd=_REPO_ROOT)
+                if eval_prompt_size > 0:
+                    eval_cmd.extend(["--limit", str(eval_prompt_size)])
+                if force_eval:
+                    eval_cmd.append("--force-judge")
+                subprocess.run(eval_cmd, check=True, cwd=_REPO_ROOT)
 
-        if eval_cfg_template:
-            eval_cfg = copy.deepcopy(eval_cfg_template)
-            eval_output_dir = phase_dir / "evaluation" / job.label
-            eval_cfg.setdefault("output", {})
-            eval_cfg["output"]["dir"] = str(eval_output_dir)
-            models = eval_cfg.get("models") or {}
-            if eval_model_slot not in models:
-                raise typer.BadParameter(
-                    f"Eval config is missing model slot '{eval_model_slot}' required for Phase 3."
-                )
-            models[eval_model_slot]["checkpoint"] = str(run_output_path)
-            _validate_comparisons_models(eval_cfg)
-            eval_cfg_path = _write_config(eval_cfg, f"phase3_eval_{job.label}.yaml")
-            eval_cmd = [
-                sys.executable,
-                "scripts/eval.py",
-                "all-judges",
-                "--config",
-                str(eval_cfg_path),
-            ]
-            if eval_prompt_size > 0:
-                eval_cmd.extend(["--limit", str(eval_prompt_size)])
-            if force_eval:
-                eval_cmd.append("--force-judge")
-            subprocess.run(eval_cmd, check=True, cwd=_REPO_ROOT)
-
-            metrics_path = eval_output_dir / "metrics" / "summary.json"
-            if not metrics_path.exists():
-                raise FileNotFoundError(
-                    f"Missing evaluation metrics for {job.label} at {metrics_path}."
-                )
-            with metrics_path.open("r", encoding="utf-8") as f:
-                metrics_summary = json.load(f)
-            for comparison, judge_block in metrics_summary.items():
-                agg_entry = aggregate_metrics.setdefault(comparison, {})
-                agg_entry.update(judge_block)
+                metrics_path = eval_output_dir / "metrics" / "summary.json"
+                if not metrics_path.exists():
+                    raise FileNotFoundError(
+                        f"Missing evaluation metrics for {job.label} at {metrics_path}."
+                    )
+                with metrics_path.open("r", encoding="utf-8") as f:
+                    metrics_summary = json.load(f)
+                for comparison, judge_block in metrics_summary.items():
+                    agg_entry = aggregate_metrics.setdefault(comparison, {})
+                    agg_entry.update(judge_block)
 
     if aggregate_metrics:
         metrics_root = phase_dir / "metrics"
@@ -745,45 +751,51 @@ def run_phase4(
 
     dataset_metrics: Dict[str, Dict[str, Any]] = {}
 
-    for dataset_label, dataset_path in dataset_specs:
-        cfg = copy.deepcopy(base_cfg)
-        cfg["models"] = copy.deepcopy(model_map)
-        prompts_cfg = cfg.setdefault("prompts", {})
-        prompts_cfg["path"] = dataset_path
+    dataset_entries = list(dataset_specs)
+    with typer.progressbar(
+        dataset_entries,
+        label="Phase 4 datasets",
+        item_show_func=lambda item: str(item[0]),
+    ) as progress_iter:
+        for dataset_label, dataset_path in progress_iter:
+            cfg = copy.deepcopy(base_cfg)
+            cfg["models"] = copy.deepcopy(model_map)
+            prompts_cfg = cfg.setdefault("prompts", {})
+            prompts_cfg["path"] = dataset_path
 
-        dataset_slug = _slug(dataset_label)
-        dataset_phase_dir = phase_dir / dataset_slug
-        dataset_phase_dir.mkdir(parents=True, exist_ok=True)
-        eval_output_dir = dataset_phase_dir / "evaluation"
-        cfg.setdefault("output", {})
-        cfg["output"]["dir"] = str(eval_output_dir)
+            dataset_slug = _slug(dataset_label)
+            dataset_phase_dir = phase_dir / dataset_slug
+            dataset_phase_dir.mkdir(parents=True, exist_ok=True)
+            eval_output_dir = dataset_phase_dir / "evaluation"
+            cfg.setdefault("output", {})
+            cfg["output"]["dir"] = str(eval_output_dir)
 
-        _validate_comparisons_models(cfg)
+            _validate_comparisons_models(cfg)
 
-        config_path = _write_config(cfg, f"phase4_{dataset_slug}.yaml")
-        typer.echo(
-            f"[orchestrate] Phase 4 evaluation for dataset '{dataset_label}' "
-            f"-> config {config_path}"
-        )
+            config_path = _write_config(cfg, f"phase4_{dataset_slug}.yaml")
+            typer.echo(
+                f"[orchestrate] Phase 4 evaluation for dataset '{dataset_label}' "
+                f"-> config {config_path}"
+            )
 
-        cmd = [
-            sys.executable,
-            "scripts/eval.py",
-            "--config",
-            str(config_path),
-        ]
-        if force_eval:
-            cmd.append("--force-judge")
-        subprocess.run(cmd, check=True, cwd=_REPO_ROOT)
+            cmd = [
+                sys.executable,
+                "scripts/eval.py",
+                "--config",
+                str(config_path),
+            ]
+            if force_eval:
+                cmd.append("--force-judge")
+            subprocess.run(cmd, check=True, cwd=_REPO_ROOT)
 
-        metrics_dir = eval_output_dir / "metrics"
-        if metrics_dir.exists():
-            dest_metrics = dataset_phase_dir / "metrics"
-            shutil.copytree(metrics_dir, dest_metrics, dirs_exist_ok=True)
-            summary_path = dest_metrics / "summary.json"
-            if summary_path.exists():
-                with summary_path.open("r", encoding="utf-8") as f:
-                    dataset_metrics[dataset_label] = json.load(f)
+            metrics_dir = eval_output_dir / "metrics"
+            if metrics_dir.exists():
+                dest_metrics = dataset_phase_dir / "metrics"
+                shutil.copytree(metrics_dir, dest_metrics, dirs_exist_ok=True)
+                summary_path = dest_metrics / "summary.json"
+                if summary_path.exists():
+                    with summary_path.open("r", encoding="utf-8") as f:
+                        dataset_metrics[dataset_label] = json.load(f)
 
     if dataset_metrics:
         summary_root = phase_dir / "summary.json"
