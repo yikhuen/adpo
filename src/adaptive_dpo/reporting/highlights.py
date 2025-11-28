@@ -90,6 +90,7 @@ def _chat_completion(messages: List[Dict[str, str]], model: str, max_output_toke
     response = client.chat.completions.create(
         model=model,
         max_completion_tokens=max_output_tokens,
+        response_format={"type": "json_object"},
         messages=messages,
     )
     return response.choices[0].message.content or ""
@@ -165,9 +166,20 @@ def _analyze_chunk(
         parsed = json.loads(raw)
     except json.JSONDecodeError:
         return []
-    if isinstance(parsed, dict):
-        parsed = [parsed]
-    return [entry for entry in parsed if isinstance(entry, dict)]
+    if not isinstance(parsed, list):
+        raise ValueError(
+            "Expected JSON array from OpenAI response; "
+            f"received type {type(parsed).__name__}. Set --llm-model none to skip highlights."
+        )
+    entries: List[Dict[str, Any]] = []
+    for entry in parsed:
+        if not isinstance(entry, dict):
+            raise ValueError(
+                "OpenAI response contained a non-object entry. "
+                "Set --llm-model none to skip highlights."
+            )
+        entries.append(entry)
+    return entries
 
 
 def curate_highlights(
