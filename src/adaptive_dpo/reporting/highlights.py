@@ -89,7 +89,6 @@ def _chat_completion(messages: List[Dict[str, str]], model: str, max_output_toke
     client = _OpenAIClient.get()
     response = client.chat.completions.create(
         model=model,
-        temperature=0.2,
         max_completion_tokens=max_output_tokens,
         messages=messages,
     )
