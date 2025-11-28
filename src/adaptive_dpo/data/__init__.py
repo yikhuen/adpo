@@ -74,11 +74,26 @@ def load_preference_dataset(
             n_samples = min(int(sample_size), len(dataset))
             dataset = dataset.select(range(n_samples))
 
-        def _map_fn(example):
-            return formatter(example, tokenizer, format_kwargs)
+        def _map_fn(batch):
+            out = {"prompt": [], "chosen": [], "rejected": []}
+            keys = list(batch.keys())
+            n_examples = len(batch[keys[0]])
+
+            for i in range(n_examples):
+                example = {k: batch[k][i] for k in keys}
+                try:
+                    formatted = formatter(example, tokenizer, format_kwargs)
+                    out["prompt"].append(formatted["prompt"])
+                    out["chosen"].append(formatted["chosen"])
+                    out["rejected"].append(formatted["rejected"])
+                except ValueError:
+                    # Skip malformed examples (e.g. empty assistant reply)
+                    continue
+            return out
 
         dataset = dataset.map(
             _map_fn,
+            batched=True,
             remove_columns=_hf_column_names(dataset),
         )
         output[split_name] = dataset
