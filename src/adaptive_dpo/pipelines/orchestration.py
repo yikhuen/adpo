@@ -63,6 +63,42 @@ def _relativize(path: Path) -> str:
         return str(path)
 
 
+def _ensure_lora_checkpoint(label: str, entry: Dict[str, Any]) -> None:
+    """Ensure LoRA checkpoints reference an existing path.
+
+    Older configs pointed to outputs/fixed_beta/checkpoint-120 whereas the actual
+    checkpoints live under outputs/fixed_beta/beta_*/checkpoint-120. This helper
+    transparently rewrites the path if we can find an unambiguous nested match.
+    """
+    if entry.get("kind") != "lora":
+        return
+    checkpoint = entry.get("checkpoint")
+    if not checkpoint:
+        raise typer.BadParameter(f"Model '{label}' of kind 'lora' requires 'checkpoint'.")
+
+    candidate = _resolve_path(Path(checkpoint))
+    if candidate.exists():
+        # Normalize to a repo-relative path for downstream configs.
+        entry["checkpoint"] = _relativize(candidate)
+        return
+
+    parent = candidate.parent
+    fallback_matches = []
+    if parent.exists():
+        for nested in parent.glob(f"*/{candidate.name}"):
+            if nested.exists():
+                fallback_matches.append(nested)
+
+    if len(fallback_matches) == 1:
+        entry["checkpoint"] = _relativize(fallback_matches[0])
+        return
+
+    raise FileNotFoundError(
+        f"Model '{label}' expected LoRA checkpoint at '{checkpoint}', but it was not found."
+        " If the run was saved under a beta_* subdirectory, provide the full path via --model."
+    )
+
+
 def _prepare_dataset_prompts_from_alias(label: str, alias: str, options: DatasetPromptOptions) -> Path:
     dest_dir = RESULTS_ROOT / "phase4_datasets"
     dest_dir.mkdir(parents=True, exist_ok=True)
@@ -768,6 +804,8 @@ def run_phase4(
         for dataset_label, dataset_path in progress_iter:
             cfg = copy.deepcopy(base_cfg)
             cfg["models"] = copy.deepcopy(model_map)
+            for model_label, model_entry in cfg["models"].items():
+                _ensure_lora_checkpoint(model_label, model_entry)
             prompts_cfg = cfg.setdefault("prompts", {})
             prompts_cfg["path"] = dataset_path
 
