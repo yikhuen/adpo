@@ -56,10 +56,31 @@ def _require_transformers():
     return AutoModelForCausalLM, AutoTokenizer
 
 
+def _resolve_checkpoint_dir(ckpt_path: Path) -> Path:
+    """Return a checkpoint directory, falling back to nested beta_* folders if needed."""
+    if ckpt_path.exists():
+        return ckpt_path
+
+    parent = ckpt_path.parent
+    if not parent.exists():
+        return ckpt_path
+
+    candidates = [nested for nested in parent.glob(f"*/{ckpt_path.name}") if nested.exists()]
+    if len(candidates) == 1:
+        return candidates[0]
+    if len(candidates) > 1:
+        raise FileNotFoundError(
+            f"Ambiguous LoRA checkpoint for '{ckpt_path}'. "
+            f"Multiple candidates found: {', '.join(str(c) for c in candidates)}. "
+            "Please provide the full nested path."
+        )
+    return ckpt_path
+
+
 def load_lora_model(ckpt_dir: str, max_seq_length: int = 4096, load_in_4bit: bool = True):
     _require_unsloth()
-    ckpt_path = Path(ckpt_dir)
-    adapter_path = ckpt_path / "adapter_model.safetensors"
+    validated_path = _resolve_checkpoint_dir(Path(ckpt_dir))
+    adapter_path = validated_path / "adapter_model.safetensors"
     if not adapter_path.exists():
         raise FileNotFoundError(
             f"Expected LoRA adapter weights at '{adapter_path}'. "
@@ -68,7 +89,7 @@ def load_lora_model(ckpt_dir: str, max_seq_length: int = 4096, load_in_4bit: boo
 
     try:
         model, tokenizer = FastLanguageModel.from_pretrained(  # type: ignore[operator]
-            model_name=str(ckpt_path),
+            model_name=str(validated_path),
             max_seq_length=max_seq_length,
             dtype=None,
             load_in_4bit=load_in_4bit,
