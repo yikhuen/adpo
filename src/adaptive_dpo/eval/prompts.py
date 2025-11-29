@@ -12,6 +12,12 @@ def load_prompts(cfg: Dict[str, Any], override_limit: Optional[int] = None) -> L
         raise FileNotFoundError(f"Prompt file not found: {path}")
     with path.open("r", encoding="utf-8") as f:
         data = [json.loads(line) for line in f]
+        
+    # Compatibility: Ensure 'prompt' key exists if 'question' is present
+    for item in data:
+        if "prompt" not in item and "question" in item:
+            item["prompt"] = item["question"]
+            
     limit = override_limit or cfg.get("limit")
     if limit:
         limit = min(limit, len(data))
