@@ -4,7 +4,7 @@ from typing import Any, Dict, Optional
 
 from .utils import apply_chat_prompt
 
-DEFAULT_PATH = "nvidia/HelpSteer2"
+DEFAULT_PATH = "kuotient/HelpSteer2-preference-pairs"
 
 
 def format_example(
