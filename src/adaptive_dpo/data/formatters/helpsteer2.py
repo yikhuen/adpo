@@ -4,7 +4,7 @@ from typing import Any, Dict, Optional
 
 from .utils import apply_chat_prompt
 
-DEFAULT_PATH = "nvidia/HelpSteer2-Preference"
+DEFAULT_PATH = "nvidia/HelpSteer2"
 
 
 def format_example(
@@ -22,7 +22,8 @@ def format_example(
     if chosen_key not in example or rejected_key not in example:
         raise KeyError(
             f"HelpSteer2 example missing '{chosen_key}' and/or '{rejected_key}' columns. "
-            "Use a preference-paired variant (e.g., nvidia/HelpSteer2-Preference) or preprocess pairs."
+            "Ensure you are using the preference-paired split (e.g., "
+            "nvidia/HelpSteer2) or preprocess pairs before evaluation."
         )
 
     prompt_text = apply_chat_prompt(
