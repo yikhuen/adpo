@@ -10,8 +10,9 @@ from adaptive_dpo.data import FORMATTERS, load_preference_dataset
 
 DEFAULT_SPLITS = {
     "ultrafeedback": {"train": "train_prefs", "test": "test_prefs"},
-    "anthropic_hh": {"train": "train", "test": "test"},
-    "sycophancy": {"train": "train", "test": "test"},
+    "anthropic_hh": {"test": "test"},
+    "sycophancy": {"test": "test"},
+    "helpsteer2": {"validation": "validation"},
 }
 
 app = typer.Typer()

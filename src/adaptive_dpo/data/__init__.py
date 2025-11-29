@@ -95,6 +95,7 @@ def load_preference_dataset(
             _map_fn,
             batched=True,
             remove_columns=_hf_column_names(dataset),
+            desc=f"Formatting {alias}:{split_name}",
         )
         output[split_name] = dataset
 
