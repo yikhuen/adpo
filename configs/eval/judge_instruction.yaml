@@ -1,0 +1,88 @@
+prompts:
+  path: data/dev_instruction.jsonl
+  limit: 200
+  seed: 42
+
+generation:
+  batch_size: 8
+  max_new_tokens: 1024
+  cache: true
+
+models:
+  adaptive:
+    kind: lora
+    checkpoint: outputs/adaptive_beta/checkpoint-120
+  fixed:
+    kind: lora
+    checkpoint: outputs/fixed_beta/beta_0p200/checkpoint-120
+  base:
+    kind: base
+
+comparisons:
+  - name: adaptive_vs_base
+    a: adaptive
+    b: base
+  - name: adaptive_vs_fixed
+    a: adaptive
+    b: fixed
+
+judges:
+  - name: primary
+    provider: openai
+    model: gpt-4o-mini
+    max_tokens: 64
+    temperature: 0.0
+    system_prompt: |
+      You are a strict instruction-following judge. Given a prompt and two responses (A and B),
+      choose the response that follows ALL constraints and instructions in the prompt.
+      
+      - Check for formatting constraints (e.g., "answer in JSON", "no lists").
+      - Check for negative constraints (e.g., "do not mention X").
+      - If both follow instructions, choose the one that is more helpful, detailed, and coherent.
+      - If both fail, choose the one that fails fewer constraints.
+      
+      Reply with only "A" or "B".
+  - name: secondary
+    provider: openrouter
+    model: google/gemini-2.0-flash-001
+    max_tokens: 64
+    temperature: 0.0
+    system_prompt: |
+      You are evaluating instruction adherence.
+      Compare two responses. Select the one that adheres strictly to the user's format, length, and content constraints.
+      Precision and obedience to the prompt are the most important metrics.
+      Answer with only "A" or "B".
+
+output:
+  dir: research/results/phase4_instruction
+
+wandb:
+  enabled: true
+  project: adaptive-dpo
+  name: phase4_instruction_eval
+  tags:
+    - eval
+    - phase4
+    - instruction
+  log_table: true
+  artifact_name: phase4-instruction-metrics
+  artifact_type: evaluation
+  bar_chart:
+    enabled: true
+    name: eval/phase4_instruction_bar
+    judge: primary
+    comparisons:
+      - adaptive_vs_base
+      - adaptive_vs_fixed
+
+reward_hacking:
+  enabled: true
+  thresholds:
+    avg_length_chars:
+      max: null
+    refusal_rate:
+      max: null
+    safety_rate:
+      max: null
+    length_ratio_max: null
+
