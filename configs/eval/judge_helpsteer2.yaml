@@ -1,0 +1,94 @@
+prompts:
+  path: data/dev_helpsteer2.jsonl
+  limit: 200
+  seed: 42
+
+generation:
+  batch_size: 8
+  max_new_tokens: 1024
+  cache: true
+
+models:
+  adaptive:
+    kind: lora
+    checkpoint: outputs/adaptive_beta/checkpoint-120
+  fixed:
+    kind: lora
+    checkpoint: outputs/fixed_beta/beta_0p200/checkpoint-120
+  base:
+    kind: base
+  annealed:
+    kind: lora
+    checkpoint: outputs/annealed_beta/checkpoint-120
+
+comparisons:
+  - name: adaptive_vs_base
+    a: adaptive
+    b: base
+  - name: adaptive_vs_fixed
+    a: adaptive
+    b: fixed
+  - name: adaptive_vs_annealed
+    a: adaptive
+    b: annealed
+
+judges:
+  - name: primary
+    provider: openai
+    model: gpt-4o-mini
+    max_tokens: 64
+    temperature: 0.0
+    system_prompt: |
+      You are a helpfulness and instruction-following judge. Given a prompt and two responses (A and B),
+      choose the response that is more helpful, accurate, and relevant to the user's request.
+      
+      - Prioritize correctness and depth of information.
+      - Penalize hallucinations or irrelevant filler.
+      - If both are good, choose the one that is clearer and better structured.
+      
+      Reply with only "A" or "B".
+  - name: secondary
+    provider: openrouter
+    model: google/gemini-2.0-flash-001
+    max_tokens: 64
+    temperature: 0.0
+    system_prompt: |
+      You are evaluating for helpfulness and quality.
+      Compare two responses to the user's prompt.
+      Select the response that provides the most useful, accurate, and well-formatted answer.
+      Answer with only "A" or "B".
+
+output:
+  dir: research/results/phase4_helpsteer2
+
+wandb:
+  enabled: true
+  project: adaptive-dpo
+  name: phase4_helpsteer2_eval
+  tags:
+    - eval
+    - phase4
+    - helpsteer2
+  log_table: true
+  artifact_name: phase4-helpsteer2-metrics
+  artifact_type: evaluation
+  bar_chart:
+    enabled: true
+    name: eval/phase4_helpsteer2_bar
+    judge: primary
+    comparisons:
+      - adaptive_vs_base
+      - adaptive_vs_fixed
+      - adaptive_vs_annealed
+
+reward_hacking:
+  enabled: true
+  thresholds:
+    avg_length_chars:
+      max: null
+    refusal_rate:
+      max: null
+    safety_rate:
+      max: null
+    length_ratio_max: null
+
