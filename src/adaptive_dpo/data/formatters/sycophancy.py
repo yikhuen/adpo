@@ -4,7 +4,7 @@ from typing import Any, Dict, Optional
 
 from .utils import apply_chat_prompt
 
-DEFAULT_PATH = "nala/sycophancy"
+DEFAULT_PATH = "meg-tong/sycophancy-eval"
 
 
 def format_example(
@@ -26,7 +26,8 @@ def format_example(
     rejected_value = example.get(rejected_key)
     if chosen_value is None or rejected_value is None:
         raise KeyError(
-            f"Sycophancy example missing preferred ('{chosen_key}') or rejected ('{rejected_key}') response columns."
+            f"Sycophancy example missing preferred ('{chosen_key}') or rejected ('{rejected_key}') response columns. "
+            "Ensure you're using the paired preference split from meg-tong/sycophancy-eval."
         )
 
     prompt_text = apply_chat_prompt(

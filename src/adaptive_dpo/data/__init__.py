@@ -64,7 +64,12 @@ def load_preference_dataset(
     output = DatasetDictCls()
 
     for split_name, split_value in splits_cfg.items():
-        dataset = load_dataset_fn(dataset_path, split=split_value)
+        try:
+            dataset = load_dataset_fn(dataset_path, split=split_value)
+        except Exception as exc:
+            raise RuntimeError(
+                f"Failed to load dataset '{dataset_path}' (alias='{alias}', split='{split_value}'): {exc}"
+            ) from None
         if shuffle:
             dataset = dataset.shuffle(seed=seed)
         if sample_frac and 0.0 < float(sample_frac) < 1.0:
