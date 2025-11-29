@@ -11,7 +11,7 @@ from adaptive_dpo.data import FORMATTERS, load_preference_dataset
 DEFAULT_SPLITS = {
     "ultrafeedback": {"train": "train_prefs", "test": "test_prefs"},
     "anthropic_hh": {"test": "test"},
-    "sycophancy": {"are_you_sure": "are_you_sure"},
+    "sycophancy": {"test": "are_you_sure"},
     "helpsteer2": {"validation": "validation"},
 }
 
