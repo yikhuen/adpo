@@ -17,6 +17,9 @@ models:
     checkpoint: outputs/fixed_beta/beta_0p200/checkpoint-120
   base:
     kind: base
+  annealed:
+    kind: lora
+    checkpoint: outputs/annealed_beta/checkpoint-120
 
 comparisons:
   - name: adaptive_vs_base
@@ -25,6 +28,9 @@ comparisons:
   - name: adaptive_vs_fixed
     a: adaptive
     b: fixed
+  - name: adaptive_vs_annealed
+    a: adaptive
+    b: annealed
 
 judges:
   - name: primary
@@ -74,6 +80,7 @@ wandb:
     comparisons:
       - adaptive_vs_base
       - adaptive_vs_fixed
+      - adaptive_vs_annealed
 
 reward_hacking:
   enabled: true
