@@ -1,6 +1,6 @@
 prompts:
   path: data/dev.jsonl
-  limit: 200
+  limit: 200        # judge on the same 200 prompts used for generation
   seed: 42
 
 generation:
@@ -17,9 +17,9 @@ models:
     checkpoint: outputs/phase5/beta_dpo/checkpoint-120
 
 comparisons:
-  - name: beta_dpo_vs_adaptive
-    a: beta_dpo
-    b: adaptive
+  - name: adaptive_vs_beta_dpo
+    a: adaptive
+    b: beta_dpo
 
 judges:
   - name: primary
