@@ -56,7 +56,8 @@ def test_beta_dpo_controller_update():
     # margin = 2.0 (unscaled) -> target = 0.1 * 2.0 = 0.2
     metrics = {"rewards/margins": 2.0 * beta1} # simulate scaled margin
     beta2 = ctrl.update(kl_batch=0.01, metrics=metrics)
-    
+    assert beta2 >= cfg.beta_min
+
     # EMA takes time to move, but let's check state
     state = ctrl.state()
     assert "margin_raw" in state

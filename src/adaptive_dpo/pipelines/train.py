@@ -13,6 +13,8 @@ from trl.trainer.kto_trainer import KTOTrainer
 from adaptive_dpo.controllers import (
     AdaptiveBetaController,
     BetaControllerConfig,
+    BetaDPOController,
+    EpsilonDPOController,
     HybridAdaptiveKLController,
     HybridControllerConfig,
     MethodSpec,
