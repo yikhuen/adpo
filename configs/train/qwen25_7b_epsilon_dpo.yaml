@@ -1,0 +1,42 @@
+# Training config for Qwen2.5-7B-Instruct with Epsilon-DPO
+project: adaptive-dpo
+seed: 42
+seeds: [42]
+
+method:
+  name: epsilon_dpo
+  params:
+    epsilon: 0.02
+    beta_init: 0.1
+  label: epsilon_dpo
+
+model:
+  name: Qwen/Qwen2.5-7B-Instruct
+  max_seq_length: 4096
+  load_in_4bit: true
+  dtype: null
+
+dataset:
+  alias: ultrafeedback
+  splits:
+    train: train_prefs
+    eval: test_prefs
+  sample_frac: 0.005
+
+trainer:
+  per_device_train_batch_size: 1
+  gradient_accumulation_steps: 4
+  learning_rate: 5.0e-6
+  warmup_ratio: 0.1
+  num_train_epochs: 1
+  max_steps: 120
+  logging_steps: 1
+  optim: adamw_8bit
+  weight_decay: 0.0
+  lr_scheduler_type: linear
+  output_dir: outputs/phase5/epsilon_dpo
+  report_to: wandb
+  max_length: 1024
+  max_prompt_length: 512
+  train_split: train
+
