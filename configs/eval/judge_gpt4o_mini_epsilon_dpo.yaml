@@ -20,6 +20,7 @@ comparisons:
   - name: adaptive_vs_epsilon_dpo
     a: adaptive
     b: epsilon_dpo
+    skip_identical: true
 
 judges:
   - name: primary

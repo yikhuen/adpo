@@ -40,6 +40,8 @@ def evaluate_comparison(
     if len(responses_a) != len(prompts) or len(responses_b) != len(prompts):
         raise ValueError(f"Response count mismatch for comparison {comparison['name']}.")
 
+    skip_identical = bool(comparison.get("skip_identical") or comparison.get("skip_identical_responses"))
+
     for judge in judges:
         decision_path = decisions_dir / f"{judge.name}__{comparison['name']}.jsonl"
         if decision_path.exists() and not force:
@@ -53,6 +55,21 @@ def evaluate_comparison(
                 desc=f"{judge.name}: {comparison['name']}",
             )
             for prompt_obj, resp_a, resp_b in decision_iter:
+                resp_a_text = (resp_a.get("response") or "").strip()
+                resp_b_text = (resp_b.get("response") or "").strip()
+                if skip_identical and resp_a_text == resp_b_text:
+                    decisions.append(
+                        {
+                            "id": prompt_obj.get("id"),
+                            "prompt": prompt_obj["prompt"],
+                            "response_a": resp_a["response"],
+                            "response_b": resp_b["response"],
+                            "choice": "tie",
+                            "reason": "identical_response",
+                        }
+                    )
+                    continue
+
                 choice = judge.judge(prompt_obj["prompt"], resp_a["response"], resp_b["response"])
                 decisions.append(
                     {
@@ -69,8 +86,9 @@ def evaluate_comparison(
 
         qualitative_samples[judge.name] = decisions[:20]
 
-        wins = sum(1 for record in decisions if record["choice"] == "A")
-        total = len(decisions)
+        valid_decisions = [record for record in decisions if record.get("choice") in ("A", "B")]
+        wins = sum(1 for record in valid_decisions if record["choice"] == "A")
+        total = len(valid_decisions)
         wr = wins / total if total else 0.0
         ci = wilson_ci(wins, total)
         metrics.setdefault(judge.name, {})
@@ -82,6 +100,7 @@ def evaluate_comparison(
             "model_a": model_a,
             "model_b": model_b,
             "decision_path": str(decision_path),
+            "skipped_identical": sum(1 for record in decisions if record.get("reason") == "identical_response"),
         }
 
     return metrics, qualitative_samples
