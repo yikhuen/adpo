@@ -751,6 +751,145 @@ def run_phase3(
         subprocess.run(bar_cmd, check=True, cwd=_REPO_ROOT)
 
 
+def run_phase5(
+    base_config: Path,
+    eval_config: Path,
+    methods: List[str],
+    eval_prompt_size: int,
+    force_eval: bool,
+    report_output: Path,
+) -> None:
+    phase_dir = _phase_output_dir("phase5_rlhf_comparison")
+    method_list = methods or ["ipo", "simpo", "kto"]
+    if not method_list:
+        raise typer.BadParameter("At least one --method must be supplied for Phase 5.")
+
+    training_jobs: List[PhaseTrainingJob] = []
+    run_outputs: Dict[str, Path] = {}
+
+    for method_name in method_list:
+        cfg = _load_yaml(base_config)
+        method_cfg = cfg.setdefault("method", {})
+        method_cfg["name"] = method_name
+        label = method_cfg.get("label") or method_name
+
+        trainer_cfg = cfg.setdefault("trainer", {})
+        base_output = Path(trainer_cfg.get("output_dir", "outputs/phase5"))
+        run_output = base_output / _slug(label)
+        trainer_cfg["output_dir"] = str(run_output)
+        cfg["seed"] = cfg.get("seed", 42)
+        cfg["seeds"] = cfg.get("seeds", [cfg["seed"]])
+
+        job = PhaseTrainingJob(
+            label=label,
+            config=cfg,
+            output_dir=run_output,
+            config_filename=f"phase5_{_slug(label)}.yaml",
+        )
+        training_jobs.append(job)
+
+    for job in training_jobs:
+        typer.echo(f"[orchestrate] Phase 5 training -> {job.label}")
+        _run_training_job(job, phase_dir / "training" / job.label)
+        run_outputs[job.label] = _resolve_path(job.output_dir)
+
+    eval_cfg = _load_yaml(eval_config)
+    eval_output_dir = phase_dir / "evaluation"
+    eval_cfg.setdefault("output", {})
+    eval_cfg["output"]["dir"] = str(eval_output_dir)
+    _prepare_eval_prompts(eval_cfg, base_config, eval_prompt_size)
+
+    models_cfg = eval_cfg.setdefault("models", {})
+    comparisons_cfg = eval_cfg.setdefault("comparisons", [])
+
+    def _ensure_comparison(name: str, a: str, b: str) -> None:
+        for entry in comparisons_cfg:
+            if entry.get("name") == name:
+                return
+        comparisons_cfg.append({"name": name, "a": a, "b": b})
+
+    for label, checkpoint in run_outputs.items():
+        models_cfg[label] = {"kind": "lora", "checkpoint": str(checkpoint)}
+        if "base" in models_cfg:
+            _ensure_comparison(f"{label}_vs_base", label, "base")
+        if "adaptive" in models_cfg:
+            _ensure_comparison(f"{label}_vs_adaptive", label, "adaptive")
+
+    eval_cfg_path = _write_config(eval_cfg, "phase5_eval.yaml")
+    eval_cmd = [
+        sys.executable,
+        "scripts/eval.py",
+        "all-judges",
+        "--config",
+        str(eval_cfg_path),
+    ]
+    if eval_prompt_size > 0:
+        eval_cmd.extend(["--limit", str(eval_prompt_size)])
+    if force_eval:
+        eval_cmd.append("--force-judge")
+    typer.echo("[orchestrate] Phase 5 evaluation (IPO/SimPO/KTO)")
+    subprocess.run(eval_cmd, check=True, cwd=_REPO_ROOT)
+
+    metrics_dir = eval_output_dir / "metrics"
+    summary_path = metrics_dir / "summary.json"
+    if not summary_path.exists():
+        raise FileNotFoundError(f"Phase 5 metrics summary missing at {summary_path}.")
+
+    with summary_path.open("r", encoding="utf-8") as f:
+        eval_summary = json.load(f)
+
+    phase_metrics: Dict[str, Dict[str, Any]] = {}
+    for label in run_outputs.keys():
+        method_metrics: Dict[str, Any] = {}
+        for suffix in ("vs_base", "vs_adaptive"):
+            key = f"{label}_{suffix}"
+            if key in eval_summary:
+                method_metrics[key] = eval_summary[key]
+        phase_metrics[label] = method_metrics
+
+    metrics_output_dir = phase_dir / "metrics"
+    metrics_output_dir.mkdir(parents=True, exist_ok=True)
+    with (metrics_output_dir / "phase5_summary.json").open("w", encoding="utf-8") as f:
+        json.dump(phase_metrics, f, indent=2)
+
+    report_path = report_output if report_output.is_absolute() else _REPO_ROOT / report_output
+    report_lines = [
+        "# Phase 5: IPO/SimPO/KTO vs Phase 2 Baselines",
+        "",
+        f"- Training template: `{_relativize(base_config)}`",
+        f"- Evaluation config: `{_relativize(eval_config)}`",
+        f"- Prompt count: {eval_prompt_size}",
+        "",
+        "| Method | Primary vs Base | Primary vs Adaptive |",
+        "| --- | --- | --- |",
+    ]
+
+    def _format_primary(metric_block: Dict[str, Any], default: str = "—") -> str:
+        primary = metric_block.get("primary")
+        if not primary:
+            return default
+        win_rate = primary.get("win_rate")
+        wins = primary.get("wins")
+        total = primary.get("total")
+        if win_rate is None or wins is None or total is None:
+            return default
+        return f"{win_rate * 100:.1f}% ({wins}/{total})"
+
+    for label in run_outputs.keys():
+        primary_base = "—"
+        primary_adaptive = "—"
+        base_key = f"{label}_vs_base"
+        adaptive_key = f"{label}_vs_adaptive"
+        if base_key in eval_summary:
+            primary_base = _format_primary(eval_summary[base_key])
+        if adaptive_key in eval_summary:
+            primary_adaptive = _format_primary(eval_summary[adaptive_key])
+        report_lines.append(f"| {label} | {primary_base} | {primary_adaptive} |")
+
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    with report_path.open("w", encoding="utf-8") as f:
+        f.write("\n".join(report_lines) + "\n")
+
 def run_phase4(
     eval_config: Path,
     datasets: List[str],
@@ -867,5 +1006,6 @@ __all__ = [
     "run_phase2",
     "run_phase3",
     "run_phase4",
+    "run_phase5",
 ]
 

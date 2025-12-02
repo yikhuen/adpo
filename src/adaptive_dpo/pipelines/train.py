@@ -7,14 +7,18 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
 from trl import DPOConfig, DPOTrainer
+from trl.trainer.kto_config import KTOConfig
+from trl.trainer.kto_trainer import KTOTrainer
 
 from adaptive_dpo.controllers import (
     AdaptiveBetaController,
     BetaControllerConfig,
     HybridAdaptiveKLController,
     HybridControllerConfig,
+    MethodSpec,
     RobustHybridConfig,
     RobustHybridController,
+    resolve_method_config,
 )
 from adaptive_dpo.data import load_preference_dataset, load_ultrafeedback_subset_formatted
 from adaptive_dpo.modeling import load_qwen25_7b
@@ -25,13 +29,14 @@ from adaptive_dpo.utils.schedules import AnnealedBetaCallback, AnnealedBetaConfi
 
 @dataclass
 class TrainerArtifacts:
-    trainer: DPOTrainer
+    trainer: Any
     run_output_dir: Path
     controller: Optional[object]
     tokenizer: Any
     train_dataset: Any
     schedule_cfg: Optional[Dict[str, Any]]
     trainer_cfg: Dict[str, Any]
+    method_label: str
 
 
 def _load_dataset(tokenizer, ds_cfg: Dict[str, Any]):
@@ -44,7 +49,14 @@ def _load_dataset(tokenizer, ds_cfg: Dict[str, Any]):
     )
 
 
-def _build_training_args(tr_cfg: Dict[str, Any], seed: int, output_dir: Path) -> DPOConfig:
+def _build_training_args(
+    tr_cfg: Dict[str, Any],
+    seed: int,
+    output_dir: Path,
+    *,
+    loss_type: str = "sigmoid",
+    reference_free: bool = False,
+) -> DPOConfig:
     return DPOConfig(
         per_device_train_batch_size=int(tr_cfg.get("per_device_train_batch_size", 1)),
         gradient_accumulation_steps=int(tr_cfg.get("gradient_accumulation_steps", 12)),
@@ -59,6 +71,35 @@ def _build_training_args(tr_cfg: Dict[str, Any], seed: int, output_dir: Path) ->
         seed=seed,
         output_dir=str(output_dir),
         report_to=str(tr_cfg.get("report_to", "wandb")),
+        loss_type=[loss_type],
+        reference_free=reference_free,
+    )
+
+
+def _build_kto_training_args(
+    tr_cfg: Dict[str, Any],
+    seed: int,
+    output_dir: Path,
+    *,
+    desirable_weight: float,
+    undesirable_weight: float,
+) -> KTOConfig:
+    return KTOConfig(
+        per_device_train_batch_size=int(tr_cfg.get("per_device_train_batch_size", 1)),
+        gradient_accumulation_steps=int(tr_cfg.get("gradient_accumulation_steps", 12)),
+        warmup_ratio=float(tr_cfg.get("warmup_ratio", 0.1)),
+        num_train_epochs=float(tr_cfg.get("num_train_epochs", 1)),
+        max_steps=int(tr_cfg.get("max_steps", -1)),
+        learning_rate=float(tr_cfg.get("learning_rate", 5e-6)),
+        logging_steps=int(tr_cfg.get("logging_steps", 1)),
+        optim=str(tr_cfg.get("optim", "adamw_8bit")),
+        weight_decay=float(tr_cfg.get("weight_decay", 0.0)),
+        lr_scheduler_type=str(tr_cfg.get("lr_scheduler_type", "linear")),
+        seed=seed,
+        output_dir=str(output_dir),
+        report_to=str(tr_cfg.get("report_to", "wandb")),
+        desirable_weight=desirable_weight,
+        undesirable_weight=undesirable_weight,
     )
 
 
@@ -170,10 +211,23 @@ def _build_trainer(
     run_idx: int,
     total_runs: int,
 ) -> TrainerArtifacts:
+    method_spec = resolve_method_config(cfg)
+    if method_spec.trainer_kind == "kto":
+        return _build_kto_trainer(cfg, seed, run_idx, total_runs, method_spec)
+    return _build_dpo_trainer(cfg, seed, run_idx, total_runs, method_spec)
+
+
+def _build_dpo_trainer(
+    cfg: Dict[str, Any],
+    seed: int,
+    run_idx: int,
+    total_runs: int,
+    method_spec: MethodSpec,
+) -> TrainerArtifacts:
     model_cfg = cfg["model"]
     tr_cfg = cfg["trainer"]
     ds_cfg = cfg["dataset"]
-    controller_cfg = cfg.get("beta_controller")
+    controller_cfg = cfg.get("beta_controller") if method_spec.name == "adaptive" else None
 
     set_global_seed(seed)
 
@@ -187,8 +241,29 @@ def _build_trainer(
 
     run_output_dir = _prepare_run_output_dir(tr_cfg, seed, total_runs)
 
-    args = _build_training_args(tr_cfg, seed, run_output_dir)
-    controller, controller_beta = _instantiate_controller(controller_cfg)
+    args = _build_training_args(
+        tr_cfg,
+        seed,
+        run_output_dir,
+        loss_type=method_spec.loss_type_arg,
+        reference_free=method_spec.reference_free,
+    )
+
+    controller = None
+    controller_beta = None
+
+    if method_spec.name == "adaptive":
+        controller, controller_beta = _instantiate_controller(controller_cfg)
+    elif method_spec.name == "beta_dpo" and method_spec.beta_dpo_config:
+        controller = BetaDPOController(method_spec.beta_dpo_config)
+        controller_beta = method_spec.beta_dpo_config.beta_min
+    elif method_spec.name == "epsilon_dpo" and method_spec.epsilon_dpo_config:
+        controller = EpsilonDPOController(method_spec.epsilon_dpo_config)
+        controller_beta = method_spec.epsilon_dpo_config.beta_init
+    else:
+        # Fixed/SimPO/IPO/Annealed (handled via callback or static beta)
+        pass
+
     beta_init = controller_beta if controller_beta is not None else float(cfg.get("fixed_beta", 0.1))
     kl_log_alpha = float(tr_cfg.get("kl_log_alpha", 0.10))
     high_kl_threshold = float(tr_cfg.get("high_kl_threshold")) if tr_cfg.get("high_kl_threshold") is not None else None
@@ -213,7 +288,11 @@ def _build_trainer(
             **trainer_kwargs,
         )
     else:
-        trainer = LoggingDPOTrainer(**trainer_kwargs)
+        trainer = LoggingDPOTrainer(
+            loss_type_override=method_spec.loss_override,
+            simpo_gamma=method_spec.simpo_gamma,
+            **trainer_kwargs,
+        )
 
     schedule_cfg = cfg.get("beta_schedule")
     if schedule_cfg:
@@ -229,6 +308,58 @@ def _build_trainer(
         train_dataset=train_dataset,
         schedule_cfg=schedule_cfg,
         trainer_cfg=tr_cfg,
+        method_label=method_spec.label,
+    )
+
+
+def _build_kto_trainer(
+    cfg: Dict[str, Any],
+    seed: int,
+    run_idx: int,
+    total_runs: int,
+    method_spec: MethodSpec,
+) -> TrainerArtifacts:
+    model_cfg = cfg["model"]
+    tr_cfg = cfg["trainer"]
+    ds_cfg = cfg["dataset"]
+
+    set_global_seed(seed)
+
+    model, ref_model, tokenizer = _load_policy_and_reference(model_cfg)
+
+    dataset = _load_dataset(tokenizer, ds_cfg)
+    train_split_name = tr_cfg.get("train_split", "train")
+    if train_split_name not in dataset:
+        raise KeyError(f"Requested train split '{train_split_name}' not found in dataset splits {list(dataset.keys())}.")
+    train_dataset = dataset[train_split_name]
+
+    run_output_dir = _prepare_run_output_dir(tr_cfg, seed, total_runs)
+
+    args = _build_kto_training_args(
+        tr_cfg,
+        seed,
+        run_output_dir,
+        desirable_weight=method_spec.desirable_weight,
+        undesirable_weight=method_spec.undesirable_weight,
+    )
+
+    trainer = KTOTrainer(
+        model=model,
+        ref_model=ref_model,
+        args=args,
+        train_dataset=train_dataset,
+        processing_class=tokenizer,
+    )
+
+    return TrainerArtifacts(
+        trainer=trainer,
+        run_output_dir=run_output_dir,
+        controller=None,
+        tokenizer=tokenizer,
+        train_dataset=train_dataset,
+        schedule_cfg=None,
+        trainer_cfg=tr_cfg,
+        method_label=method_spec.label,
     )
 
 
@@ -276,6 +407,7 @@ def _train_single_run(cfg: Dict[str, Any], seed: int, run_idx: int, total_runs: 
         "dataset_alias": cfg["dataset"].get("alias", "ultrafeedback"),
         "beta_initial": getattr(trainer, "beta", None),
         "beta_final": getattr(trainer, "beta", None),
+        "method": artifacts.method_label,
     }
     if controller:
         stats["controller_state"] = controller.state()

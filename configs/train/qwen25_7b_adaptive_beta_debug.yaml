@@ -2,6 +2,9 @@ project: adaptive-dpo
 seed: 0
 seeds: [0]
 
+method:
+  name: adaptive
+
 model:
   name: Qwen/Qwen2.5-7B-Instruct
   max_seq_length: 4096

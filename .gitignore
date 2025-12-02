@@ -23,6 +23,7 @@ cache/
 eval_results/
 outputs/
 checkpoints/
+all_results/
 *.pt
 *.bin
 *.jsonl
@@ -41,3 +42,4 @@ Thumbs.db
 # Research materials
 research/
 authorkitAAAI/
+AuthorKit26-1/

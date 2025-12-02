@@ -87,6 +87,13 @@ python scripts/orchestrate.py phase4 \
   --dataset uf=alias:ultrafeedback \
   --dataset hh=alias:anthropic_hh \
   --model adaptive=kind:lora,checkpoint:outputs/adaptive_beta/checkpoint-120
+
+# Phase 5: IPO/SimPO/KTO replay of Phase 2 settings
+python scripts/orchestrate.py phase5 \
+  --base-config configs/train/qwen25_7b_fixed_beta.yaml \
+  --eval-config configs/eval/judge_gpt4o_mini.yaml \
+  --method ipo --method simpo --method kto \
+  --eval-prompt-size 200
 ```
 
 Highlights:
@@ -96,6 +103,7 @@ Highlights:
 - Phase 3 triggers evaluations for each ablation, stores per-variant metrics, and emits `phase3/ablation_win_rates.png` using `scripts/plot_ablation_bar.py`.
 - Phase 4 accepts dataset specs of the form `name=alias:<formatter>` or `name=config:<yaml>`; prompts are materialised with `scripts/prepare_dev_set.py` before running the sweep.
 - Phase 2 and Phase 4 reports now append GPT-5-mini curated qualitative highlights (set `--llm-model none` on the report scripts to disable).
+- Phase 5 wraps IPO, SimPO, and KTO runs in the same training/eval budget as Phase 2, writing summaries to `results/phase5_report_latest.md` and storing metrics under `research/results/phase5_rlhf_comparison/`.
 
 ### Typical Repository Workflow
 

@@ -10,6 +10,7 @@ from adaptive_dpo.pipelines.orchestration import (
     run_phase2,
     run_phase3,
     run_phase4,
+    run_phase5,
 )
 
 app = typer.Typer(help="Orchestrate multi-phase Adaptive DPO experiments.")
@@ -209,6 +210,39 @@ def phase4(
         dataset_prompt_size,
         dataset_split,
         dataset_tokenizer,
+        report_output,
+    )
+
+
+@app.command()
+def phase5(
+    base_config: Path = typer.Option(
+        Path("configs/train/qwen25_7b_fixed_beta.yaml"),
+        help="Training config template reused for IPO/SimPO/KTO.",
+    ),
+    eval_config: Path = typer.Option(
+        Path("configs/eval/judge_gpt4o_mini.yaml"),
+        help="Evaluation config (Phase 2 template).",
+    ),
+    methods: List[str] = typer.Option(
+        ["ipo", "simpo", "kto"],
+        "--method",
+        "-m",
+        help="Method name to queue (e.g. ipo, simpo, kto, beta_dpo, epsilon_dpo).",
+    ),
+    eval_prompt_size: int = typer.Option(200, help="Number of evaluation prompts (matches Phase 2)."),
+    force_eval: bool = typer.Option(False, help="Force judge re-run even if cached decisions exist."),
+    report_output: Path = typer.Option(
+        Path("results/phase5_report_latest.md"),
+        help="Markdown file capturing IPO/SimPO/KTO comparison summary.",
+    ),
+):
+    run_phase5(
+        base_config,
+        eval_config,
+        methods,
+        eval_prompt_size,
+        force_eval,
         report_output,
     )
 

@@ -1,5 +1,6 @@
 from typing import Any, Dict, Optional, List, Tuple
 
+import copy
 import logging
 import math
 
@@ -70,14 +71,33 @@ def _build_comprehensive_metrics(
 class LoggingDPOTrainer(DPOTrainer):
     """Extension of TRL's DPOTrainer that logs KL statistics to Trainer trackers."""
 
-    def __init__(self, *args, kl_log_alpha: float = 0.10, **kwargs):
+    def __init__(
+        self,
+        *args,
+        kl_log_alpha: float = 0.10,
+        loss_type_override: Optional[str] = None,
+        simpo_gamma: float = 0.5,
+        **kwargs,
+    ):
         self._fixed_beta_value = kwargs.pop("fixed_beta_value", None)
         self._kl_log_alpha = float(kl_log_alpha)
         self._kl_ema = 0.0
         self.phase_trace: List[Dict[str, Any]] = []
         self._policy_forward_cache: Optional[Dict[str, torch.Tensor]] = None
         self._ref_forward_cache: Optional[Dict[str, torch.Tensor]] = None
+        self._loss_type_override = loss_type_override
+        self._simpo_gamma = float(simpo_gamma)
+
+        args_cfg = kwargs.get("args")
+        if loss_type_override in {"simpo"} and args_cfg is not None and hasattr(args_cfg, "loss_type"):
+            args_copy = copy.deepcopy(args_cfg)
+            args_copy.loss_type = ["sigmoid"]
+            kwargs["args"] = args_copy
+
         super().__init__(*args, **kwargs)
+
+        if loss_type_override:
+            self.loss_type = [loss_type_override]
 
     def set_fixed_beta_value(self, value: Optional[float]):
         self._fixed_beta_value = value
@@ -460,6 +480,44 @@ class LoggingDPOTrainer(DPOTrainer):
             return loss, metrics
         return loss
 
+    def dpo_loss(
+        self,
+        chosen_logps: torch.FloatTensor,
+        rejected_logps: torch.FloatTensor,
+        ref_chosen_logps: torch.FloatTensor,
+        ref_rejected_logps: torch.FloatTensor,
+        loss_type: str = "sigmoid",
+        model_output: Optional[dict[str, torch.FloatTensor]] = None,
+    ) -> tuple[torch.FloatTensor, torch.FloatTensor, torch.FloatTensor]:
+        if loss_type == "simpo":
+            return self._simpo_loss(chosen_logps, rejected_logps)
+        return super().dpo_loss(
+            chosen_logps,
+            rejected_logps,
+            ref_chosen_logps,
+            ref_rejected_logps,
+            loss_type,
+            model_output,
+        )
+
+    def _simpo_loss(
+        self,
+        chosen_logps: torch.FloatTensor,
+        rejected_logps: torch.FloatTensor,
+    ) -> tuple[torch.FloatTensor, torch.FloatTensor, torch.FloatTensor]:
+        device = self.accelerator.device
+        beta = max(float(getattr(self, "beta", 0.1)), 1e-8)
+        logits = (chosen_logps - rejected_logps).to(device)
+        margin = self._simpo_gamma / beta
+        logits = logits - margin
+        losses = (
+            -F.logsigmoid(beta * logits) * (1 - self.label_smoothing)
+            - F.logsigmoid(-beta * logits) * self.label_smoothing
+        )
+        chosen_rewards = beta * chosen_logps.to(device).detach()
+        rejected_rewards = beta * rejected_logps.to(device).detach()
+        return losses, chosen_rewards, rejected_rewards
+
 
 class AdaptiveDPOTrainer(LoggingDPOTrainer):
     def __init__(self, beta_controller: Any, *args, **kwargs):
@@ -498,9 +556,10 @@ class AdaptiveDPOTrainer(LoggingDPOTrainer):
                 batch_logits=policy_logits,
                 attention_mask=attention_mask,
                 global_step=getattr(self.state, "global_step", 0),
+                metrics=metrics,
             )
         else:
-            beta = self.beta_controller.update(kl_batch)
+            beta = self.beta_controller.update(kl_batch, metrics=metrics)
 
         old_beta = getattr(self, "beta", None)
         self.beta = beta
